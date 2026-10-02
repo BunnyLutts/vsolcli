@@ -42,12 +42,6 @@
       }
     ],
     "views": {
-      "explorer": [
-        {
-          "id": "olcli.projects",
-          "name": "olcli Projects"
-        }
-      ],
       "olcli": [
         {
           "id": "olcli.projects",
