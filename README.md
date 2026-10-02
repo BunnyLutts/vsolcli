@@ -18,7 +18,7 @@
 
 登录后，活动栏会出现独立的 `olcli` 视图，类似 Overleaf Workshop 的项目面板。每个服务器是一级节点，项目显示在对应服务器下；打开后可通过标题栏按钮登录或刷新，点击项目即可拉取。拉取目录使用 VS Code 原生目录选择器，完成后在当前窗口打开，并写入 `.olcli-project.json` 保存服务器 URL、cookie 名称和项目 ID 的对应关系。多个服务器可通过重复登录添加。
 
-自动行为可通过 `olcli.enabled`、`olcli.autoSyncOnSave`、`olcli.autoCompileOnSave`、`olcli.pdfOutput`、`olcli.autoRefreshPreview`、`olcli.syncOnConfigurationChange` 和 `olcli.debounceMs` 控制。保存 `.tex` 文件时会将该文件作为云端编译 root；默认将结果下载为 `./.build/{文件名}.pdf`，例如保存 `main.tex` 后生成 `.build/main.pdf`。在 TeX 编辑器右上角点击拆分预览按钮，可在旁侧打开对应 PDF；云端编译下载完成后会自动重新打开预览以刷新内容。
+自动行为可通过 `olcli.enabled`、`olcli.autoSyncOnSave`、`olcli.autoCompileOnSave`、`olcli.pdfOutput`、`olcli.autoRefreshPreview`、`olcli.syncOnConfigurationChange` 和 `olcli.debounceMs` 控制。保存 `.tex` 文件时会将该文件作为云端编译 root；默认将结果下载为 `./.build/{文件名}.pdf`，例如保存 `main.tex` 后生成 `.build/main.pdf`。在 TeX 编辑器右上角可点击同步并编译按钮或拆分预览按钮；云端编译下载完成后会自动重新打开预览以刷新内容。
 
 如果安装了 LaTeX Workshop，插件默认会在工作区将 `latex-workshop.latex.autoBuild.run` 从 `onSave` 调整为 `never`，避免保存时同时进行本地编译。将 `olcli.disableLatexWorkshopOnSave` 设为 `false` 可保留 LaTeX Workshop 的原设置。
 

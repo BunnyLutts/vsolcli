@@ -33,6 +33,12 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand('olcli.sync', () => run(false)),
     vscode.commands.registerCommand('olcli.compile', () => void compileOnly(output)),
     vscode.commands.registerCommand('olcli.syncAndCompile', () => run(true)),
+    vscode.commands.registerCommand('olcli.syncAndCompileCurrent', () => {
+      const document = vscode.window.activeTextEditor?.document;
+      const project = document && projectRootFor(document.uri.fsPath);
+      if (!document || !project) { vscode.window.showWarningMessage('olcli: open a TeX file inside a project first.'); return; }
+      run(true, false, project, document.uri.fsPath, serverForProject(project));
+    }),
     vscode.commands.registerCommand('olcli.login', async () => { if (await login(output)) await projects.refresh(); }),
     vscode.commands.registerCommand('olcli.listProjects', () => projects.refresh()),
     vscode.commands.registerCommand('olcli.pullProject', (project?: Project) => pullProject(project, output, projects)),
