@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import { spawn } from 'node:child_process';
 import * as path from 'node:path';
+import * as fs from 'node:fs';
 import { cliLaunch } from './executable';
 import { parseSessionCookie } from './login';
 
@@ -18,12 +19,12 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(vscode.window.registerTreeDataProvider('olcli.projects', projects));
   void projects.refresh(false);
 
-  const run = (compile: boolean, automatic = false) => {
+  const run = (compile: boolean, automatic = false, projectDirectory?: string) => {
     if (!enabled()) return;
     if (automatic) {
       clearTimeout(timer);
-      timer = setTimeout(() => void syncAndMaybeCompile(compile, output), debounceMs());
-    } else void syncAndMaybeCompile(compile, output);
+      timer = setTimeout(() => void syncAndMaybeCompile(compile, output, projectDirectory), debounceMs());
+    } else void syncAndMaybeCompile(compile, output, projectDirectory);
   };
 
   context.subscriptions.push(
@@ -34,9 +35,10 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand('olcli.listProjects', () => projects.refresh()),
     vscode.commands.registerCommand('olcli.pullProject', (project?: Project) => pullProject(project, output, projects)),
     vscode.workspace.onDidSaveTextDocument(document => {
-      if (vscode.workspace.getConfiguration('olcli').get<boolean>('autoSyncOnSave', true) && inProject(document.uri.fsPath)) {
-        run(vscode.workspace.getConfiguration('olcli').get<boolean>('autoCompileOnSave', true), true);
-      }
+      const config = vscode.workspace.getConfiguration('olcli');
+      const project = projectRootFor(document.uri.fsPath);
+      output.appendLine(`saved: ${document.uri.fsPath} (project: ${project ?? 'none'})`);
+      if (config.get<boolean>('autoSyncOnSave', true) && project) run(config.get<boolean>('autoCompileOnSave', true), true, project);
     }),
     vscode.workspace.onDidChangeConfiguration(event => {
       if (authenticating) return;
@@ -137,11 +139,25 @@ function root(): string | undefined {
   const configured = vscode.workspace.getConfiguration('olcli').get<string>('projectRoot', '').trim();
   return configured ? (path.isAbsolute(configured) ? configured : path.resolve(vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? process.cwd(), configured)) : vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
 }
-function inProject(file: string): boolean { const project = root(); return !!project && (file === project || file.startsWith(project + path.sep)); }
+function projectRootFor(file: string): string | undefined {
+  const configured = root();
+  if (configured && isWithin(file, configured)) return configured;
+  let directory = path.dirname(file);
+  while (true) {
+    if (fs.existsSync(path.join(directory, '.olcli.json'))) return directory;
+    const parent = path.dirname(directory);
+    if (parent === directory) return undefined;
+    directory = parent;
+  }
+}
+function isWithin(file: string, directory: string): boolean {
+  const relative = path.relative(path.resolve(directory), path.resolve(file));
+  return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
+}
 
-async function syncAndMaybeCompile(compile: boolean, output: vscode.OutputChannel): Promise<void> {
+async function syncAndMaybeCompile(compile: boolean, output: vscode.OutputChannel, projectDirectory?: string): Promise<void> {
   if (running) { queued = true; return; }
-  const cwd = root();
+  const cwd = projectDirectory ?? root();
   if (!cwd) { vscode.window.showWarningMessage('olcli: open a workspace or set olcli.projectRoot.'); return; }
   running = true;
   try {
@@ -152,7 +168,7 @@ async function syncAndMaybeCompile(compile: boolean, output: vscode.OutputChanne
     vscode.window.showErrorMessage(`olcli failed: ${error instanceof Error ? error.message : String(error)}`);
   } finally {
     running = false;
-    if (queued) { queued = false; void syncAndMaybeCompile(compile, output); }
+    if (queued) { queued = false; void syncAndMaybeCompile(compile, output, projectDirectory); }
   }
 }
 
