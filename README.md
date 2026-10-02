@@ -16,7 +16,7 @@
 
 插件直接使用内置 olcli 客户端验证所选登录方式，再读取远端项目列表。验证成功后仅将会话 cookie 按实例地址保存到 VS Code SecretStorage，不保存邮箱密码。凭据通过子进程环境变量传递，不写入设置、命令参数或日志。邮箱密码登录依赖实例支持密码认证；使用 SSO 的实例可使用浏览器 session cookie。插件登录不会修改 olcli 的全局认证配置；自定义 CLI 设置仅用于登录后的项目操作。
 
-登录后，资源管理器中会出现 `olcli Projects`，点击项目即可拉取；也可以运行 `olcli: List Projects` 刷新列表，或运行 `olcli: Pull Project` 后选择项目和本地目录。插件调用的是 `olcli list --json` 与 `olcli pull`，因此项目权限和认证行为与命令行一致。
+登录后，活动栏会出现独立的 `olcli` 视图，类似 Overleaf Workshop 的项目面板。打开后可通过标题栏按钮登录或刷新，点击项目即可拉取；也可以运行 `olcli: Pull Project` 后选择项目和本地目录。插件调用的是 `olcli list --json` 与 `olcli pull`，因此项目权限和认证行为与命令行一致。
 
 自动行为可通过 `olcli.enabled`、`olcli.autoSyncOnSave`、`olcli.autoCompileOnSave`、`olcli.syncOnConfigurationChange` 和 `olcli.debounceMs` 控制。
 

@@ -47,6 +47,21 @@
           "id": "olcli.projects",
           "name": "olcli Projects"
         }
+      ],
+      "olcli": [
+        {
+          "id": "olcli.projects",
+          "name": "Projects"
+        }
+      ]
+    },
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "olcli",
+          "title": "olcli",
+          "icon": "resources/olcli.svg"
+        }
       ]
     },
     "menus": {
