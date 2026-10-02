@@ -1,0 +1,27 @@
+# VS Code olcli Sync
+
+在 VS Code 中为 `olcli` 提供自动同步和编译：文档保存后执行 `olcli sync`，成功后可执行 `olcli compile`；修改 `olcli` 配置时也可触发同样流程。
+
+## 使用
+
+1. 插件内置 olcli，安装插件后无需全局安装 CLI 或 npm。通过插件登录命令完成认证。
+2. 在此目录执行 `npm install && npm run compile`，按 `F5` 调试或打包安装扩展。
+3. 在工作区设置 `olcli.projectRoot`（默认为第一个工作区目录）。
+
+可用命令：`olcli: Sync Project`、`olcli: Compile Project`、`olcli: Sync and Compile Project`。输出位于 `olcli` Output Channel。
+
+## Self-hosted 登录、项目列表和拉取
+
+在命令面板运行 `olcli: Login to Self-hosted Overleaf`，输入实例地址，例如 `https://overleaf.example.com`，然后选择登录方式。邮箱密码登录只需输入邮箱和密码，插件自动识别服务器返回的 cookie 名称。SSO 实例选择 Session cookie，粘贴 cookie 值或 `overleaf.sid=value` 形式的单个会话 cookie。只粘贴值时使用 `olcli.cookieName`（默认 `overleaf_session2`）；特殊名称可在设置中调整，无需每次登录填写。
+
+插件直接使用内置 olcli 客户端验证所选登录方式，再读取远端项目列表。验证成功后仅将会话 cookie 按实例地址保存到 VS Code SecretStorage，不保存邮箱密码。凭据通过子进程环境变量传递，不写入设置、命令参数或日志。邮箱密码登录依赖实例支持密码认证；使用 SSO 的实例可使用浏览器 session cookie。插件登录不会修改 olcli 的全局认证配置；自定义 CLI 设置仅用于登录后的项目操作。
+
+登录后，资源管理器中会出现 `olcli Projects`，点击项目即可拉取；也可以运行 `olcli: List Projects` 刷新列表，或运行 `olcli: Pull Project` 后选择项目和本地目录。插件调用的是 `olcli list --json` 与 `olcli pull`，因此项目权限和认证行为与命令行一致。
+
+自动行为可通过 `olcli.enabled`、`olcli.autoSyncOnSave`、`olcli.autoCompileOnSave`、`olcli.syncOnConfigurationChange` 和 `olcli.debounceMs` 控制。
+
+## 找不到 olcli
+
+`olcli.executable` 默认留空，使用随插件打包的 CLI 和 VS Code Node 运行时。已有设置若为 `olcli` 或外部路径，请清空以使用内置版本。需要 VS Code 1.99 或更新版本。打包 VSIX 时必须保留运行依赖；VS Code 不会在安装扩展时运行 npm install。
+
+如果终端能运行 `olcli`，但插件提示 `ENOENT`，通常是 VS Code 扩展进程的 PATH 与终端不同。插件会额外查找 PNPM_HOME 和常见全局安装目录；也可将 `olcli.executable` 设置为 `command -v olcli` 返回的绝对路径。该路径必须位于扩展实际运行的环境中（例如 Remote SSH 或 WSL 远端），不能使用另一台机器的路径。启动时查询失败会记录到 olcli 输出面板，手动刷新仍显示错误。

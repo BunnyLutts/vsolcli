@@ -1,0 +1,132 @@
+{
+  "name": "vsolcli",
+  "displayName": "VS Code olcli Sync",
+  "description": "Automatically sync and compile Overleaf projects with olcli.",
+  "version": "0.1.0",
+  "publisher": "vsolcli",
+  "engines": {
+    "vscode": "^1.99.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "olcli.sync",
+        "title": "olcli: Sync Project"
+      },
+      {
+        "command": "olcli.compile",
+        "title": "olcli: Compile Project"
+      },
+      {
+        "command": "olcli.syncAndCompile",
+        "title": "olcli: Sync and Compile Project"
+      },
+      {
+        "command": "olcli.login",
+        "title": "olcli: Login to Self-hosted Overleaf"
+      },
+      {
+        "command": "olcli.listProjects",
+        "title": "olcli: List Projects"
+      },
+      {
+        "command": "olcli.pullProject",
+        "title": "olcli: Pull Project"
+      }
+    ],
+    "views": {
+      "explorer": [
+        {
+          "id": "olcli.projects",
+          "name": "olcli Projects"
+        }
+      ]
+    },
+    "menus": {
+      "view/title": [
+        {
+          "command": "olcli.login",
+          "when": "view == olcli.projects",
+          "group": "navigation"
+        },
+        {
+          "command": "olcli.listProjects",
+          "when": "view == olcli.projects",
+          "group": "navigation"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "olcli",
+      "properties": {
+        "olcli.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable automatic olcli actions."
+        },
+        "olcli.autoSyncOnSave": {
+          "type": "boolean",
+          "default": true,
+          "description": "Run olcli sync when a document is saved."
+        },
+        "olcli.autoCompileOnSave": {
+          "type": "boolean",
+          "default": true,
+          "description": "Compile after an automatic save sync succeeds."
+        },
+        "olcli.syncOnConfigurationChange": {
+          "type": "boolean",
+          "default": true,
+          "description": "Run sync and compile when olcli settings change."
+        },
+        "olcli.projectRoot": {
+          "type": "string",
+          "default": "",
+          "description": "Project directory. Empty uses the first workspace folder."
+        },
+        "olcli.executable": {
+          "type": "string",
+          "default": "",
+          "description": "Empty uses bundled olcli. Set a command or absolute path to use an external installation."
+        },
+        "olcli.baseUrl": {
+          "type": "string",
+          "default": "",
+          "description": "Self-hosted Overleaf URL, for example https://overleaf.example.com."
+        },
+        "olcli.cookieName": {
+          "type": "string",
+          "default": "overleaf_session2",
+          "description": "Session cookie name used by the server."
+        },
+        "olcli.debounceMs": {
+          "type": "number",
+          "default": 800,
+          "minimum": 0,
+          "description": "Delay before an automatic action starts."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "test": "npm run compile && node --test test/*.test.cjs"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.85.0",
+    "typescript": "^5.3.0"
+  },
+  "dependencies": {
+    "@aloth/olcli": "0.13.0"
+  }
+}
