@@ -35,6 +35,7 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand('olcli.login', async () => { if (await login(output)) await projects.refresh(); }),
     vscode.commands.registerCommand('olcli.listProjects', () => projects.refresh()),
     vscode.commands.registerCommand('olcli.pullProject', (project?: Project) => pullProject(project, output, projects)),
+    vscode.commands.registerCommand('olcli.openPdfPreview', (uri?: vscode.Uri) => openPdfPreview(uri)),
     vscode.workspace.onDidSaveTextDocument(document => {
       if (running || Date.now() < suppressSaveUntil) return;
       const config = vscode.workspace.getConfiguration('olcli');
@@ -178,10 +179,29 @@ async function syncAndMaybeCompile(compile: boolean, output: vscode.OutputChanne
 
 async function compileAndDownload(cwd: string, savedFile: string | undefined, output: vscode.OutputChannel): Promise<void> {
   const config = vscode.workspace.getConfiguration('olcli');
-  const outputPath = path.resolve(cwd, config.get<string>('pdfOutput', 'cloud-compiled.pdf'));
+  const sourceName = savedFile ? path.basename(savedFile, path.extname(savedFile)) : 'main';
+  const configuredPath = config.get<string>('pdfOutput', './build/{文件名}.pdf')
+    .split('{文件名}').join(sourceName)
+    .split('{filename}').join(sourceName);
+  const outputPath = path.resolve(cwd, configuredPath);
+  fs.mkdirSync(path.dirname(outputPath), { recursive: true });
   const args = ['pdf', '-o', outputPath];
   if (savedFile?.toLowerCase().endsWith('.tex')) args.push('-r', path.relative(cwd, savedFile));
   await executeCapture(args, cwd, output);
+}
+
+async function openPdfPreview(uri?: vscode.Uri): Promise<void> {
+  const source = uri ?? vscode.window.activeTextEditor?.document.uri;
+  if (!source) return;
+  const project = projectRootFor(source.fsPath) ?? root();
+  if (!project) { vscode.window.showWarningMessage('olcli: open a project file first.'); return; }
+  const sourceName = path.basename(source.fsPath, path.extname(source.fsPath));
+  const configuredPath = vscode.workspace.getConfiguration('olcli').get<string>('pdfOutput', './build/{文件名}.pdf')
+    .split('{文件名}').join(sourceName)
+    .split('{filename}').join(sourceName);
+  const pdf = vscode.Uri.file(path.resolve(project, configuredPath));
+  try { await vscode.workspace.fs.stat(pdf); } catch { vscode.window.showWarningMessage(`PDF not found: ${pdf.fsPath}`); return; }
+  await vscode.commands.executeCommand('vscode.open', pdf, vscode.ViewColumn.Beside);
 }
 
 async function compileOnly(output: vscode.OutputChannel): Promise<void> {

@@ -18,7 +18,7 @@
 
 登录后，活动栏会出现独立的 `olcli` 视图，类似 Overleaf Workshop 的项目面板。打开后可通过标题栏按钮登录或刷新，点击项目即可拉取；也可以运行 `olcli: Pull Project` 后选择项目和本地目录。插件调用的是 `olcli list --json` 与 `olcli pull`，因此项目权限和认证行为与命令行一致。
 
-自动行为可通过 `olcli.enabled`、`olcli.autoSyncOnSave`、`olcli.autoCompileOnSave`、`olcli.pdfOutput`、`olcli.syncOnConfigurationChange` 和 `olcli.debounceMs` 控制。保存 `.tex` 文件时会将该文件作为云端编译 root；默认将结果下载为项目根目录的 `cloud-compiled.pdf`。
+自动行为可通过 `olcli.enabled`、`olcli.autoSyncOnSave`、`olcli.autoCompileOnSave`、`olcli.pdfOutput`、`olcli.syncOnConfigurationChange` 和 `olcli.debounceMs` 控制。保存 `.tex` 文件时会将该文件作为云端编译 root；默认将结果下载为 `./build/{文件名}.pdf`，例如保存 `main.tex` 后生成 `build/main.pdf`。在 TeX 编辑器右上角点击拆分预览按钮，可在旁侧打开对应 PDF。
 
 ## 找不到 olcli
 
