@@ -14,6 +14,7 @@ let suppressSaveUntil = 0;
 
 export function activate(context: vscode.ExtensionContext): void {
   secrets = context.secrets;
+  void disableLocalLatexBuild();
   const output = vscode.window.createOutputChannel('olcli');
   context.subscriptions.push(output);
   const projects = new ProjectsProvider(output);
@@ -49,6 +50,16 @@ export function activate(context: vscode.ExtensionContext): void {
     })
   );
   output.appendLine('olcli extension activated.');
+}
+
+async function disableLocalLatexBuild(): Promise<void> {
+  const config = vscode.workspace.getConfiguration('olcli');
+  if (!config.get<boolean>('disableLatexWorkshopOnSave', true)) return;
+  const latex = vscode.workspace.getConfiguration('latex-workshop');
+  const current = latex.get<string>('latex.autoBuild.run');
+  if (current === 'onSave') {
+    await latex.update('latex.autoBuild.run', 'never', vscode.ConfigurationTarget.Workspace);
+  }
 }
 
 interface Server { id: string; name: string; url: string; cookieName: string; }

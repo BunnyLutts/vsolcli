@@ -20,6 +20,8 @@
 
 自动行为可通过 `olcli.enabled`、`olcli.autoSyncOnSave`、`olcli.autoCompileOnSave`、`olcli.pdfOutput`、`olcli.autoRefreshPreview`、`olcli.syncOnConfigurationChange` 和 `olcli.debounceMs` 控制。保存 `.tex` 文件时会将该文件作为云端编译 root；默认将结果下载为 `./build/{文件名}.pdf`，例如保存 `main.tex` 后生成 `build/main.pdf`。在 TeX 编辑器右上角点击拆分预览按钮，可在旁侧打开对应 PDF；云端编译下载完成后会自动重新打开预览以刷新内容。
 
+如果安装了 LaTeX Workshop，插件默认会在工作区将 `latex-workshop.latex.autoBuild.run` 从 `onSave` 调整为 `never`，避免保存时同时进行本地编译。将 `olcli.disableLatexWorkshopOnSave` 设为 `false` 可保留 LaTeX Workshop 的原设置。
+
 ## 找不到 olcli
 
 `olcli.executable` 默认留空，使用随插件打包的 CLI 和 VS Code Node 运行时。已有设置若为 `olcli` 或外部路径，请清空以使用内置版本。需要 VS Code 1.99 或更新版本。打包 VSIX 时必须保留运行依赖；VS Code 不会在安装扩展时运行 npm install。

@@ -102,6 +102,11 @@
           "default": true,
           "description": "Compile after an automatic save sync succeeds."
         },
+        "olcli.disableLatexWorkshopOnSave": {
+          "type": "boolean",
+          "default": true,
+          "description": "Disable LaTeX Workshop's local on-save build so olcli handles sync and cloud compilation."
+        },
         "olcli.pdfOutput": {
           "type": "string",
           "default": "./build/{文件名}.pdf",
