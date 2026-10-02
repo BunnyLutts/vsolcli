@@ -10,6 +10,7 @@ let running = false;
 let queued = false;
 let secrets: vscode.SecretStorage;
 let authenticating = false;
+let suppressSaveUntil = 0;
 
 export function activate(context: vscode.ExtensionContext): void {
   secrets = context.secrets;
@@ -35,6 +36,7 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand('olcli.listProjects', () => projects.refresh()),
     vscode.commands.registerCommand('olcli.pullProject', (project?: Project) => pullProject(project, output, projects)),
     vscode.workspace.onDidSaveTextDocument(document => {
+      if (running || Date.now() < suppressSaveUntil) return;
       const config = vscode.workspace.getConfiguration('olcli');
       const project = projectRootFor(document.uri.fsPath);
       output.appendLine(`saved: ${document.uri.fsPath} (project: ${project ?? 'none'})`);
@@ -160,6 +162,7 @@ async function syncAndMaybeCompile(compile: boolean, output: vscode.OutputChanne
   const cwd = projectDirectory ?? root();
   if (!cwd) { vscode.window.showWarningMessage('olcli: open a workspace or set olcli.projectRoot.'); return; }
   running = true;
+  suppressSaveUntil = Date.now() + 3000;
   try {
     await execute('sync', cwd, output);
     if (compile) await execute('compile', cwd, output);
@@ -168,6 +171,7 @@ async function syncAndMaybeCompile(compile: boolean, output: vscode.OutputChanne
     vscode.window.showErrorMessage(`olcli failed: ${error instanceof Error ? error.message : String(error)}`);
   } finally {
     running = false;
+    suppressSaveUntil = Date.now() + 1500;
     if (queued) { queued = false; void syncAndMaybeCompile(compile, output, projectDirectory); }
   }
 }
