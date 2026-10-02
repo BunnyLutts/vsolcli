@@ -90,6 +90,11 @@
           "default": true,
           "description": "Compile after an automatic save sync succeeds."
         },
+        "olcli.pdfOutput": {
+          "type": "string",
+          "default": "cloud-compiled.pdf",
+          "description": "PDF path relative to the project root for cloud compilation results downloaded after save."
+        },
         "olcli.syncOnConfigurationChange": {
           "type": "boolean",
           "default": true,

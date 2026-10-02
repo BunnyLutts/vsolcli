@@ -1,6 +1,6 @@
 # VS Code olcli Sync
 
-在 VS Code 中为 `olcli` 提供自动同步和编译：文档保存后执行 `olcli sync`，成功后可执行 `olcli compile`；修改 `olcli` 配置时也可触发同样流程。
+在 VS Code 中为 `olcli` 提供自动同步和云端编译：文档保存后执行 `olcli sync`，成功后执行 `olcli pdf` 在云端编译，并把生成的 PDF 下载到本地；修改 `olcli` 配置时也可触发同样流程。
 
 ## 使用
 
@@ -18,7 +18,7 @@
 
 登录后，活动栏会出现独立的 `olcli` 视图，类似 Overleaf Workshop 的项目面板。打开后可通过标题栏按钮登录或刷新，点击项目即可拉取；也可以运行 `olcli: Pull Project` 后选择项目和本地目录。插件调用的是 `olcli list --json` 与 `olcli pull`，因此项目权限和认证行为与命令行一致。
 
-自动行为可通过 `olcli.enabled`、`olcli.autoSyncOnSave`、`olcli.autoCompileOnSave`、`olcli.syncOnConfigurationChange` 和 `olcli.debounceMs` 控制。
+自动行为可通过 `olcli.enabled`、`olcli.autoSyncOnSave`、`olcli.autoCompileOnSave`、`olcli.pdfOutput`、`olcli.syncOnConfigurationChange` 和 `olcli.debounceMs` 控制。保存 `.tex` 文件时会将该文件作为云端编译 root；默认将结果下载为项目根目录的 `cloud-compiled.pdf`。
 
 ## 找不到 olcli
 
