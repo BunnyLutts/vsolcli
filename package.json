@@ -109,7 +109,7 @@
         },
         "olcli.pdfOutput": {
           "type": "string",
-          "default": "./build/{文件名}.pdf",
+          "default": "./.build/{文件名}.pdf",
           "description": "PDF path relative to the project root. {文件名} is replaced by the saved TeX file name."
         },
         "olcli.autoRefreshPreview": {

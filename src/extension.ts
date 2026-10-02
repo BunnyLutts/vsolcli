@@ -215,7 +215,7 @@ async function syncAndMaybeCompile(compile: boolean, output: vscode.OutputChanne
 async function compileAndDownload(cwd: string, savedFile: string | undefined, output: vscode.OutputChannel, server?: Server): Promise<void> {
   const config = vscode.workspace.getConfiguration('olcli');
   const sourceName = savedFile ? path.basename(savedFile, path.extname(savedFile)) : 'main';
-  const configuredPath = config.get<string>('pdfOutput', './build/{文件名}.pdf')
+  const configuredPath = config.get<string>('pdfOutput', './.build/{文件名}.pdf')
     .split('{文件名}').join(sourceName)
     .split('{filename}').join(sourceName);
   const outputPath = path.resolve(cwd, configuredPath);
@@ -244,7 +244,7 @@ async function openPdfPreview(uri?: vscode.Uri): Promise<void> {
   const project = projectRootFor(source.fsPath) ?? root();
   if (!project) { vscode.window.showWarningMessage('olcli: open a project file first.'); return; }
   const sourceName = path.basename(source.fsPath, path.extname(source.fsPath));
-  const configuredPath = vscode.workspace.getConfiguration('olcli').get<string>('pdfOutput', './build/{文件名}.pdf')
+  const configuredPath = vscode.workspace.getConfiguration('olcli').get<string>('pdfOutput', './.build/{文件名}.pdf')
     .split('{文件名}').join(sourceName)
     .split('{filename}').join(sourceName);
   const pdf = vscode.Uri.file(path.resolve(project, configuredPath));
