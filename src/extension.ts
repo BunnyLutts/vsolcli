@@ -20,12 +20,12 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(vscode.window.registerTreeDataProvider('olcli.projects', projects));
   void projects.refresh(false);
 
-  const run = (compile: boolean, automatic = false, projectDirectory?: string, savedFile?: string) => {
+  const run = (compile: boolean, automatic = false, projectDirectory?: string, savedFile?: string, server?: Server) => {
     if (!enabled()) return;
     if (automatic) {
       clearTimeout(timer);
-      timer = setTimeout(() => void syncAndMaybeCompile(compile, output, projectDirectory, savedFile), debounceMs());
-    } else void syncAndMaybeCompile(compile, output, projectDirectory, savedFile);
+      timer = setTimeout(() => void syncAndMaybeCompile(compile, output, projectDirectory, savedFile, server), debounceMs());
+    } else void syncAndMaybeCompile(compile, output, projectDirectory, savedFile, server);
   };
 
   context.subscriptions.push(
@@ -41,7 +41,7 @@ export function activate(context: vscode.ExtensionContext): void {
       const config = vscode.workspace.getConfiguration('olcli');
       const project = projectRootFor(document.uri.fsPath);
       output.appendLine(`saved: ${document.uri.fsPath} (project: ${project ?? 'none'})`);
-      if (config.get<boolean>('autoSyncOnSave', true) && project) run(config.get<boolean>('autoCompileOnSave', true), true, project, document.uri.fsPath);
+      if (config.get<boolean>('autoSyncOnSave', true) && project) run(config.get<boolean>('autoCompileOnSave', true), true, project, document.uri.fsPath, serverForProject(project));
     }),
     vscode.workspace.onDidChangeConfiguration(event => {
       if (authenticating) return;
@@ -175,27 +175,33 @@ function isWithin(file: string, directory: string): boolean {
   const relative = path.relative(path.resolve(directory), path.resolve(file));
   return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
 }
+function serverForProject(directory: string): Server | undefined {
+  try {
+    const mapping = JSON.parse(fs.readFileSync(path.join(directory, '.olcli-project.json'), 'utf8')) as { server?: string };
+    return vscode.workspace.getConfiguration('olcli').get<Server[]>('servers', []).find(server => server.url === mapping.server);
+  } catch { return undefined; }
+}
 
-async function syncAndMaybeCompile(compile: boolean, output: vscode.OutputChannel, projectDirectory?: string, savedFile?: string): Promise<void> {
+async function syncAndMaybeCompile(compile: boolean, output: vscode.OutputChannel, projectDirectory?: string, savedFile?: string, server?: Server): Promise<void> {
   if (running) { queued = true; return; }
   const cwd = projectDirectory ?? root();
   if (!cwd) { vscode.window.showWarningMessage('olcli: open a workspace or set olcli.projectRoot.'); return; }
   running = true;
   suppressSaveUntil = Date.now() + 3000;
   try {
-    await execute('sync', cwd, output);
-    if (compile) await compileAndDownload(cwd, savedFile, output);
+    await execute('sync', cwd, output, server);
+    if (compile) await compileAndDownload(cwd, savedFile, output, server);
     vscode.window.setStatusBarMessage(compile ? 'olcli: synced, cloud compiled, and downloaded' : 'olcli: synced', 3000);
   } catch (error) {
     vscode.window.showErrorMessage(`olcli failed: ${error instanceof Error ? error.message : String(error)}`);
   } finally {
     running = false;
     suppressSaveUntil = Date.now() + 1500;
-    if (queued) { queued = false; void syncAndMaybeCompile(compile, output, projectDirectory, savedFile); }
+    if (queued) { queued = false; void syncAndMaybeCompile(compile, output, projectDirectory, savedFile, server); }
   }
 }
 
-async function compileAndDownload(cwd: string, savedFile: string | undefined, output: vscode.OutputChannel): Promise<void> {
+async function compileAndDownload(cwd: string, savedFile: string | undefined, output: vscode.OutputChannel, server?: Server): Promise<void> {
   const config = vscode.workspace.getConfiguration('olcli');
   const sourceName = savedFile ? path.basename(savedFile, path.extname(savedFile)) : 'main';
   const configuredPath = config.get<string>('pdfOutput', './build/{文件名}.pdf')
@@ -205,7 +211,7 @@ async function compileAndDownload(cwd: string, savedFile: string | undefined, ou
   fs.mkdirSync(path.dirname(outputPath), { recursive: true });
   const args = ['pdf', '-o', outputPath];
   if (savedFile?.toLowerCase().endsWith('.tex')) args.push('-r', path.relative(cwd, savedFile));
-  await executeCapture(args, cwd, output);
+  await executeCapture(args, cwd, output, undefined, server);
   if (vscode.workspace.getConfiguration('olcli').get<boolean>('autoRefreshPreview', true)) {
     await refreshPdfPreview(outputPath);
   }
@@ -252,8 +258,8 @@ async function compileOnly(output: vscode.OutputChannel): Promise<void> {
   } finally { running = false; }
 }
 
-async function execute(command: string, cwd: string, output: vscode.OutputChannel): Promise<void> {
-  await executeCapture([command], cwd, output);
+async function execute(command: string, cwd: string, output: vscode.OutputChannel, server?: Server): Promise<void> {
+  await executeCapture([command], cwd, output, undefined, server);
 }
 
 async function executeCapture(args: string[], cwd: string, output: vscode.OutputChannel, environment?: Record<string, string>, server?: Server): Promise<string> {
