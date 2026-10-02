@@ -188,6 +188,19 @@ async function compileAndDownload(cwd: string, savedFile: string | undefined, ou
   const args = ['pdf', '-o', outputPath];
   if (savedFile?.toLowerCase().endsWith('.tex')) args.push('-r', path.relative(cwd, savedFile));
   await executeCapture(args, cwd, output);
+  if (vscode.workspace.getConfiguration('olcli').get<boolean>('autoRefreshPreview', true)) {
+    await refreshPdfPreview(outputPath);
+  }
+}
+
+async function refreshPdfPreview(pdfPath: string): Promise<void> {
+  const pdf = vscode.Uri.file(pdfPath);
+  try { await vscode.workspace.fs.stat(pdf); } catch { return; }
+  await vscode.commands.executeCommand('vscode.open', pdf, {
+    viewColumn: vscode.ViewColumn.Beside,
+    preserveFocus: true,
+    preview: false
+  });
 }
 
 async function openPdfPreview(uri?: vscode.Uri): Promise<void> {
@@ -201,7 +214,11 @@ async function openPdfPreview(uri?: vscode.Uri): Promise<void> {
     .split('{filename}').join(sourceName);
   const pdf = vscode.Uri.file(path.resolve(project, configuredPath));
   try { await vscode.workspace.fs.stat(pdf); } catch { vscode.window.showWarningMessage(`PDF not found: ${pdf.fsPath}`); return; }
-  await vscode.commands.executeCommand('vscode.open', pdf, vscode.ViewColumn.Beside);
+  await vscode.commands.executeCommand('vscode.open', pdf, {
+    viewColumn: vscode.ViewColumn.Beside,
+    preserveFocus: false,
+    preview: false
+  });
 }
 
 async function compileOnly(output: vscode.OutputChannel): Promise<void> {

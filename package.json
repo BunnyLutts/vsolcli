@@ -107,6 +107,11 @@
           "default": "./build/{文件名}.pdf",
           "description": "PDF path relative to the project root. {文件名} is replaced by the saved TeX file name."
         },
+        "olcli.autoRefreshPreview": {
+          "type": "boolean",
+          "default": true,
+          "description": "Refresh the split PDF preview after cloud compilation downloads a new PDF."
+        },
         "olcli.syncOnConfigurationChange": {
           "type": "boolean",
           "default": true,
