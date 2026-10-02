@@ -51,29 +51,44 @@ export function activate(context: vscode.ExtensionContext): void {
   output.appendLine('olcli extension activated.');
 }
 
-interface Project { id: string; name: string; }
+interface Server { id: string; name: string; url: string; cookieName: string; }
+interface Project { id: string; name: string; server: Server; }
+interface ServerNode { server: Server; }
 
-class ProjectsProvider implements vscode.TreeDataProvider<Project> {
+class ProjectsProvider implements vscode.TreeDataProvider<Project | ServerNode> {
   private readonly changed = new vscode.EventEmitter<void>();
   readonly onDidChangeTreeData = this.changed.event;
-  private items: Project[] = [];
+  private items: Array<Project | ServerNode> = [];
   constructor(private readonly output: vscode.OutputChannel) {}
-  getTreeItem(project: Project): vscode.TreeItem {
+  getTreeItem(node: Project | ServerNode): vscode.TreeItem {
+    if ('server' in node && !('id' in node)) {
+      return new vscode.TreeItem(node.server.name, vscode.TreeItemCollapsibleState.Collapsed);
+    }
+    const project = node as Project;
     const item = new vscode.TreeItem(project.name, vscode.TreeItemCollapsibleState.None);
     item.description = project.id;
     item.command = { command: 'olcli.pullProject', title: 'Pull Project', arguments: [project] };
     return item;
   }
-  getChildren(): Thenable<Project[]> { return Promise.resolve(this.items); }
-  async refresh(notify = true): Promise<Project[]> {
+  getChildren(node?: ServerNode): Thenable<Array<Project | ServerNode>> {
+    if (node) return Promise.resolve(this.items.filter(item => 'id' in item && item.server.id === node.server.id));
+    return this.refresh().then(() => this.items.filter(item => 'server' in item && !('id' in item)));
+  }
+  async refresh(notify = true): Promise<Array<Project | ServerNode>> {
     try {
-      const data: unknown = JSON.parse(await executeCapture(['list', '--json'], root() ?? process.cwd(), this.output));
-      if (!Array.isArray(data)) throw new Error('Invalid project list response');
-      this.items = data.map(item => {
-        const id = item.id ?? item._id;
-        if (typeof id !== 'string' || typeof item.name !== 'string') throw new Error('Invalid project entry');
-        return { id, name: item.name };
-      });
+      const servers = vscode.workspace.getConfiguration('olcli').get<Server[]>('servers', []);
+      const result: Array<Project | ServerNode> = [];
+      for (const server of servers) {
+        const data: unknown = JSON.parse(await executeCapture(['list', '--json'], root() ?? process.cwd(), this.output, undefined, server));
+        if (!Array.isArray(data)) throw new Error(`Invalid project list response from ${server.name}`);
+        result.push({ server });
+        result.push(...data.map(item => {
+          const id = item.id ?? item._id;
+          if (typeof id !== 'string' || typeof item.name !== 'string') throw new Error('Invalid project entry');
+          return { id, name: item.name, server };
+        }));
+      }
+      this.items = result;
       this.changed.fire(); return this.items;
     }
     catch (error) {
@@ -117,6 +132,9 @@ async function login(output: vscode.OutputChannel): Promise<boolean> {
     const response = JSON.parse(await executeCapture([url, cookieName], process.cwd(), output, credentials));
     if (!Array.isArray(response.projects) || typeof response.session?.value !== 'string' || typeof response.session?.name !== 'string') throw new Error('Invalid login response');
     await secrets.store(`olcli:${url}`, JSON.stringify({ OVERLEAF_SESSION: response.session.value }));
+    const servers = config.get<Server[]>('servers', []).filter(server => server.url !== url);
+    servers.push({ id: encodeURIComponent(url), name: new URL(url).hostname, url, cookieName: response.session.name });
+    await config.update('servers', servers, vscode.ConfigurationTarget.Global);
     const target = vscode.workspace.workspaceFolders?.length ? vscode.ConfigurationTarget.Workspace : vscode.ConfigurationTarget.Global;
     await config.update('baseUrl', url, target);
     await config.update('cookieName', response.session.name, target);
@@ -126,13 +144,13 @@ async function login(output: vscode.OutputChannel): Promise<boolean> {
 }
 
 async function pullProject(project: Project | undefined, output: vscode.OutputChannel, provider: ProjectsProvider): Promise<void> {
-  const projects = project ? [] : await provider.refresh();
+  const projects = project ? [] : (await provider.refresh()).filter((item): item is Project => 'id' in item);
   const selected = project;
   const choice = selected ?? await vscode.window.showQuickPick(projects.map(item => ({ label: item.name, description: item.id, item }))).then(item => item?.item);
   if (!choice) return;
-  const target = await vscode.window.showInputBox({ prompt: 'Local directory', value: path.join(root() ?? process.cwd(), choice.name.replace(/[<>:"/\\|?*]/g, '_')) });
-  if (!target) return;
-  try { const directory = path.resolve(target); await executeCapture(['pull', choice.id, directory], process.cwd(), output); await vscode.commands.executeCommand('vscode.openFolder', vscode.Uri.file(directory), true); }
+  const target = await vscode.window.showOpenDialog({ canSelectFiles: false, canSelectFolders: true, canSelectMany: false, openLabel: 'Select project directory', title: `Select local directory for ${choice.name}`, defaultUri: vscode.Uri.file(root() ?? process.cwd()) });
+  if (!target?.[0]) return;
+  try { const directory = target[0].fsPath; await executeCapture(['pull', choice.id, directory], process.cwd(), output, undefined, choice.server); await fs.promises.writeFile(path.join(directory, '.olcli-project.json'), JSON.stringify({ server: choice.server.url, cookieName: choice.server.cookieName, projectId: choice.id, projectName: choice.name }, null, 2)); await vscode.commands.executeCommand('vscode.openFolder', vscode.Uri.file(directory), false); }
   catch (error) { vscode.window.showErrorMessage(`olcli pull failed: ${message(error)}`); }
 }
 
@@ -238,13 +256,13 @@ async function execute(command: string, cwd: string, output: vscode.OutputChanne
   await executeCapture([command], cwd, output);
 }
 
-async function executeCapture(args: string[], cwd: string, output: vscode.OutputChannel, environment?: Record<string, string>): Promise<string> {
+async function executeCapture(args: string[], cwd: string, output: vscode.OutputChannel, environment?: Record<string, string>, server?: Server): Promise<string> {
   const launch = environment
     ? { executable: process.execPath, prefix: [path.join(__dirname, '..', 'auth.mjs')], environment: { ELECTRON_RUN_AS_NODE: '1' } }
     : cliLaunch(vscode.workspace.getConfiguration('olcli').get<string>('executable', ''));
   const executable = launch.executable;
-  const baseUrl = vscode.workspace.getConfiguration('olcli').get<string>('baseUrl', '').trim();
-  const cookieName = vscode.workspace.getConfiguration('olcli').get<string>('cookieName', '').trim();
+  const baseUrl = server?.url ?? vscode.workspace.getConfiguration('olcli').get<string>('baseUrl', '').trim();
+  const cookieName = server?.cookieName ?? vscode.workspace.getConfiguration('olcli').get<string>('cookieName', '').trim();
   const fullArgs = !environment && baseUrl && !args.includes('--base-url') ? ['--base-url', baseUrl, ...(cookieName ? ['--cookie-name', cookieName] : []), ...args] : args;
   const stored = environment ? undefined : await secrets.get(`olcli:${baseUrl.replace(/\/$/, '')}`);
   const credentials = environment ?? (stored ? JSON.parse(stored) as Record<string, string> : undefined);

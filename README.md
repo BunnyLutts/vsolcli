@@ -16,7 +16,7 @@
 
 插件直接使用内置 olcli 客户端验证所选登录方式，再读取远端项目列表。验证成功后仅将会话 cookie 按实例地址保存到 VS Code SecretStorage，不保存邮箱密码。凭据通过子进程环境变量传递，不写入设置、命令参数或日志。邮箱密码登录依赖实例支持密码认证；使用 SSO 的实例可使用浏览器 session cookie。插件登录不会修改 olcli 的全局认证配置；自定义 CLI 设置仅用于登录后的项目操作。
 
-登录后，活动栏会出现独立的 `olcli` 视图，类似 Overleaf Workshop 的项目面板。打开后可通过标题栏按钮登录或刷新，点击项目即可拉取；也可以运行 `olcli: Pull Project` 后选择项目和本地目录。插件调用的是 `olcli list --json` 与 `olcli pull`，因此项目权限和认证行为与命令行一致。
+登录后，活动栏会出现独立的 `olcli` 视图，类似 Overleaf Workshop 的项目面板。每个服务器是一级节点，项目显示在对应服务器下；打开后可通过标题栏按钮登录或刷新，点击项目即可拉取。拉取目录使用 VS Code 原生目录选择器，完成后在当前窗口打开，并写入 `.olcli-project.json` 保存服务器 URL、cookie 名称和项目 ID 的对应关系。多个服务器可通过重复登录添加。
 
 自动行为可通过 `olcli.enabled`、`olcli.autoSyncOnSave`、`olcli.autoCompileOnSave`、`olcli.pdfOutput`、`olcli.autoRefreshPreview`、`olcli.syncOnConfigurationChange` 和 `olcli.debounceMs` 控制。保存 `.tex` 文件时会将该文件作为云端编译 root；默认将结果下载为 `./build/{文件名}.pdf`，例如保存 `main.tex` 后生成 `build/main.pdf`。在 TeX 编辑器右上角点击拆分预览按钮，可在旁侧打开对应 PDF；云端编译下载完成后会自动重新打开预览以刷新内容。
 

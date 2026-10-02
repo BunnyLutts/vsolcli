@@ -137,6 +137,11 @@
           "default": "overleaf_session2",
           "description": "Session cookie name used by the server."
         },
+        "olcli.servers": {
+          "type": "array",
+          "default": [],
+          "description": "Configured self-hosted Overleaf servers. Login adds entries automatically."
+        },
         "olcli.debounceMs": {
           "type": "number",
           "default": 800,

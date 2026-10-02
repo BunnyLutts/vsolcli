@@ -33,6 +33,7 @@ test('self-hosted login, project tree, pull and authentication failures', async 
       createOutputChannel: () => ({ ...disposable, append: text => { output += text; }, appendLine: text => { output += text; } }),
       registerTreeDataProvider: (id, value) => { provider = value; return disposable; },
       showInputBox: async () => inputs.shift(),
+      showOpenDialog: async () => [{ fsPath: inputs.shift() }],
       showQuickPick: async choices => typeof choices[0] === 'string' ? method : choices[0],
       showErrorMessage: text => errors.push(text),
       showInformationMessage() {}, showWarningMessage() {}, setStatusBarMessage() {}
@@ -75,10 +76,12 @@ test('self-hosted login, project tree, pull and authentication failures', async 
   assert.deepEqual(request.args.slice(1), ['https://custom.example', 'overleaf.sid']);
   assert.ok(!request.args.includes('private-cookie'));
   assert.ok(!output.includes('private-cookie'));
-  const projects = await provider.getChildren();
-  assert.deepEqual(projects, [{ id: 'abc123', name: 'My Paper' }]);
+  const servers = await provider.getChildren();
+  assert.equal(servers.length, 1);
+  const projects = await provider.getChildren(servers[0]);
+  assert.deepEqual(projects.map(({ id, name }) => ({ id, name })), [{ id: 'abc123', name: 'My Paper' }]);
   assert.equal(provider.getTreeItem(projects[0]).command.command, 'olcli.pullProject');
-  inputs = [path.join(process.cwd(), 'downloaded project')];
+  inputs = [process.cwd()];
   await commands.get('olcli.pullProject')(projects[0]);
   const pull = calls.find(call => call.args.includes('pull'));
   assert.equal(pull.args[pull.args.indexOf('pull') + 1], 'abc123');
