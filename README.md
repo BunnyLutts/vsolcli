@@ -27,3 +27,7 @@
 `olcli.executable` 默认留空，使用随插件打包的 CLI 和 VS Code Node 运行时。已有设置若为 `olcli` 或外部路径，请清空以使用内置版本。需要 VS Code 1.99 或更新版本。打包 VSIX 时必须保留运行依赖；VS Code 不会在安装扩展时运行 npm install。
 
 如果终端能运行 `olcli`，但插件提示 `ENOENT`，通常是 VS Code 扩展进程的 PATH 与终端不同。插件会额外查找 PNPM_HOME 和常见全局安装目录；也可将 `olcli.executable` 设置为 `command -v olcli` 返回的绝对路径。该路径必须位于扩展实际运行的环境中（例如 Remote SSH 或 WSL 远端），不能使用另一台机器的路径。启动时查询失败会记录到 olcli 输出面板，手动刷新仍显示错误。
+
+## 许可证
+
+本项目采用 MIT 许可证，详见 [LICENSE](LICENSE)。
