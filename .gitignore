@@ -1,3 +1,21 @@
+# Dependencies
 node_modules/
+
+# Compiled output
 out/
+*.tsbuildinfo
 *.vsix
+
+# Generated PDFs (olcli.pdfOutput default: ./.build/{文件名}.pdf)
+.build/
+
+# olcli local project mapping
+.olcli-project.json
+
+# Logs
+*.log
+npm-debug.log*
+
+# Editor / OS
+.DS_Store
+Thumbs.db
