@@ -116,7 +116,7 @@
         "olcli.disableLatexWorkshopOnSave": {
           "type": "boolean",
           "default": true,
-          "description": "Disable LaTeX Workshop's local on-save build so olcli handles sync and cloud compilation."
+          "description": "Disable LaTeX Workshop's onSave and onFileChange auto builds so olcli handles cloud compilation."
         },
         "olcli.pdfOutput": {
           "type": "string",

@@ -1,5 +1,9 @@
 # VS Code olcli Sync
 
+## 已知问题
+
+- 云端编译的语法错误目前可能无法正常显示：保存或手动同步并编译时，仍会继续请求编译并生成或下载 PDF，部分错误语法可能被忽略，Problems 面板也未必能准确报告。生成 PDF 或显示编译完成不代表源文件没有错误。此问题尚未解决；目前请在 Overleaf 网页端检查编译错误和日志，插件的错误提示仅作辅助参考。
+
 在 VS Code 中为 `olcli` 提供自动同步和云端编译：文档保存后执行 `olcli sync`，成功后执行 `olcli pdf` 在云端编译，并把生成的 PDF 下载到本地；修改 `olcli` 配置时也可触发同样流程。
 
 ## 使用
@@ -20,9 +24,13 @@
 
 自动行为可通过 `olcli.enabled`、`olcli.autoSyncOnSave`、`olcli.autoCompileOnSave`、`olcli.pdfOutput`、`olcli.autoRefreshPreview`、`olcli.syncOnConfigurationChange` 和 `olcli.debounceMs` 控制。保存 `.tex` 文件时会将该文件作为云端编译 root；默认将结果下载为 `./.build/{文件名}.pdf`，例如保存 `main.tex` 后生成 `.build/main.pdf`。在 TeX 编辑器右上角可点击同步并编译按钮或拆分预览按钮；云端编译下载完成后会自动重新打开预览以刷新内容。
 
-如果安装了 LaTeX Workshop，插件默认会在工作区将 `latex-workshop.latex.autoBuild.run` 从 `onSave` 调整为 `never`，避免保存时同时进行本地编译。将 `olcli.disableLatexWorkshopOnSave` 设为 `false` 可保留 LaTeX Workshop 的原设置。
+如果安装了 LaTeX Workshop，插件默认会在工作区将 `latex-workshop.latex.autoBuild.run` 的 `onSave` 或 `onFileChange` 调整为 `never`，并在同步前确认设置生效，避免保存和同步写入文件时触发本地编译。将 `olcli.disableLatexWorkshopOnSave` 设为 `false` 会停止管理此设置；恢复本地自动编译需要手动修改 LaTeX Workshop 设置。
 
 ## 找不到 olcli
+
+云端日志中的 TeX 错误和 LaTeX 警告会显示在 Problems 面板，来源为 `olcli (cloud)`，支持点击跳转及编辑器波浪线。可与 LaTeX Workshop 的编辑、补全和 PDF 查看功能并用，无需开启其本地自动编译。编译成功生成 PDF 时也会请求日志，以发现仍有 PDF 输出的错误。当前使用 `olcli output log` 获取日志，会额外触发一次云端编译；复杂嵌套文件日志的定位可能不精确。
+
+云端 PDF 编译失败时，通知会显示 CLI 返回的错误详情，并显示 olcli 输出面板。插件还会尝试下载云端编译日志到对应 PDF 旁的 `.log` 文件并打开它。日志下载调用 `olcli output log`，会再次请求云端编译；若网络、认证或服务器故障导致日志无法下载，原因保留在输出面板中。
 
 `olcli.executable` 默认留空，使用随插件打包的 CLI 和 VS Code Node 运行时。已有设置若为 `olcli` 或外部路径，请清空以使用内置版本。需要 VS Code 1.99 或更新版本。打包 VSIX 时必须保留运行依赖；VS Code 不会在安装扩展时运行 npm install。
 

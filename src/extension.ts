@@ -4,6 +4,7 @@ import * as path from 'node:path';
 import * as fs from 'node:fs';
 import { cliLaunch } from './executable';
 import { parseSessionCookie } from './login';
+import { parseCompileLog } from './diagnostics';
 
 let timer: NodeJS.Timeout | undefined;
 let running = false;
@@ -11,10 +12,13 @@ let queued = false;
 let secrets: vscode.SecretStorage;
 let authenticating = false;
 let suppressSaveUntil = 0;
+let cloudDiagnostics: vscode.DiagnosticCollection;
 
 export function activate(context: vscode.ExtensionContext): void {
   secrets = context.secrets;
-  void disableLocalLatexBuild();
+  cloudDiagnostics = vscode.languages.createDiagnosticCollection('olcli-cloud');
+  context.subscriptions.push(cloudDiagnostics);
+  void disableLocalLatexBuild().catch(error => vscode.window.showErrorMessage(`Unable to disable LaTeX Workshop auto build: ${message(error)}`));
   const output = vscode.window.createOutputChannel('olcli');
   context.subscriptions.push(output);
   const projects = new ProjectsProvider(output);
@@ -52,6 +56,9 @@ export function activate(context: vscode.ExtensionContext): void {
     }),
     vscode.workspace.onDidChangeConfiguration(event => {
       if (authenticating) return;
+      if (event.affectsConfiguration('latex-workshop.latex.autoBuild.run') || event.affectsConfiguration('olcli.disableLatexWorkshopOnSave')) {
+        void disableLocalLatexBuild().catch(error => vscode.window.showErrorMessage(message(error)));
+      }
       if (event.affectsConfiguration('olcli') && vscode.workspace.getConfiguration('olcli').get<boolean>('syncOnConfigurationChange', true)) run(true, true);
     })
   );
@@ -61,9 +68,10 @@ export function activate(context: vscode.ExtensionContext): void {
 async function disableLocalLatexBuild(): Promise<void> {
   const config = vscode.workspace.getConfiguration('olcli');
   if (!config.get<boolean>('disableLatexWorkshopOnSave', true)) return;
+  if (!vscode.workspace.workspaceFolders?.length) return;
   const latex = vscode.workspace.getConfiguration('latex-workshop');
   const current = latex.get<string>('latex.autoBuild.run');
-  if (current === 'onSave') {
+  if (current === 'onSave' || current === 'onFileChange') {
     await latex.update('latex.autoBuild.run', 'never', vscode.ConfigurationTarget.Workspace);
   }
 }
@@ -206,6 +214,7 @@ async function syncAndMaybeCompile(compile: boolean, output: vscode.OutputChanne
   running = true;
   suppressSaveUntil = Date.now() + 3000;
   try {
+    await disableLocalLatexBuild();
     await execute('sync', cwd, output, server);
     if (compile) await compileAndDownload(cwd, savedFile, output, server);
     vscode.window.setStatusBarMessage(compile ? 'olcli: synced, cloud compiled, and downloaded' : 'olcli: synced', 3000);
@@ -228,10 +237,47 @@ async function compileAndDownload(cwd: string, savedFile: string | undefined, ou
   fs.mkdirSync(path.dirname(outputPath), { recursive: true });
   const args = ['pdf', '-o', outputPath];
   if (savedFile?.toLowerCase().endsWith('.tex')) args.push('-r', path.relative(cwd, savedFile));
-  await executeCapture(args, cwd, output, undefined, server);
+  try {
+    await executeCapture(args, cwd, output, undefined, server);
+  } catch (error) {
+    const logPath = outputPath.replace(/\.pdf$/i, '') + '.log';
+    const logArgs = ['output', 'log', '-o', logPath];
+    if (savedFile?.toLowerCase().endsWith('.tex')) logArgs.push('-r', path.relative(cwd, savedFile));
+    output.show(true);
+    try {
+      await executeCapture(logArgs, cwd, output, undefined, server);
+      await publishCloudDiagnostics(logPath, cwd, savedFile);
+      await vscode.commands.executeCommand('vscode.open', vscode.Uri.file(logPath), { preview: false, preserveFocus: true });
+    } catch (logError) { output.appendLine(`Unable to download cloud compile log: ${message(logError)}`); }
+    throw error;
+  }
+  const logPath = outputPath.replace(/\.pdf$/i, '') + '.log';
+  const logArgs = ['output', 'log', '-o', logPath];
+  if (savedFile?.toLowerCase().endsWith('.tex')) logArgs.push('-r', path.relative(cwd, savedFile));
+  try {
+    await executeCapture(logArgs, cwd, output, undefined, server);
+    await publishCloudDiagnostics(logPath, cwd, savedFile);
+  } catch (error) { output.appendLine(`Unable to update cloud diagnostics: ${message(error)}`); }
   if (vscode.workspace.getConfiguration('olcli').get<boolean>('autoRefreshPreview', true)) {
     await refreshPdfPreview(outputPath);
   }
+}
+
+async function publishCloudDiagnostics(logPath: string, cwd: string, savedFile?: string): Promise<void> {
+  const log = await fs.promises.readFile(logPath, 'utf8');
+  const groups = new Map<string, vscode.Diagnostic[]>();
+  for (const problem of parseCompileLog(log, savedFile ?? path.join(cwd, 'main.tex'))) {
+    const file = path.resolve(cwd, problem.file);
+    if (!isWithin(file, cwd)) continue;
+    const diagnostic = new vscode.Diagnostic(new vscode.Range(problem.line, 0, problem.line, 1), problem.message,
+      problem.warning ? vscode.DiagnosticSeverity.Warning : vscode.DiagnosticSeverity.Error);
+    diagnostic.source = 'olcli (cloud)';
+    const entries = groups.get(file) ?? [];
+    entries.push(diagnostic);
+    groups.set(file, entries);
+  }
+  cloudDiagnostics.clear();
+  for (const [file, entries] of groups) cloudDiagnostics.set(vscode.Uri.file(file), entries);
 }
 
 async function refreshPdfPreview(pdfPath: string): Promise<void> {
@@ -295,12 +341,20 @@ async function executeCapture(args: string[], cwd: string, output: vscode.Output
     if (credentials) { delete env.OVERLEAF_SESSION; delete env.OVERLEAF_EMAIL; delete env.OVERLEAF_PASSWORD; }
     const child = spawn(executable, [...launch.prefix, ...fullArgs], { cwd, env: { ...env, ...credentials, ...launch.environment } });
     let text = '';
+    let stderr = '';
     child.stdout.on('data', data => { text += data.toString(); if (!environment) output.append(data.toString()); });
-    child.stderr.on('data', data => output.append(data.toString()));
+    child.stderr.on('data', data => {
+      stderr += data.toString();
+      output.append(data.toString());
+    });
     child.on('error', (error: NodeJS.ErrnoException) => reject(error.code === 'ENOENT'
       ? new Error(`Cannot start ${executable}. Install olcli or set olcli.executable to its absolute path; also check that the project directory exists.`)
       : error));
-    child.on('close', code => code === 0 ? resolve(text) : reject(new Error(`command exited with code ${code}`)));
+    child.on('close', code => {
+      if (code === 0) { resolve(text); return; }
+      const detail = stderr.replace(/\u001b\[[0-9;]*m/g, '').trim();
+      reject(new Error(detail || `command exited with code ${code}`));
+    });
   });
 }
 function message(error: unknown): string { return error instanceof Error ? error.message : String(error); }

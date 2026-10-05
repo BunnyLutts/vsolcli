@@ -11,6 +11,7 @@ test('self-hosted login, project tree, pull and authentication failures', async 
   const errors = [];
   const opened = [];
   const settings = { baseUrl: 'https://old.example', cookieName: 'overleaf_session2' };
+  const latexSettings = { 'latex.autoBuild.run': 'onFileChange' };
   let inputs = [];
   let method = 'Session cookie';
   let provider;
@@ -18,6 +19,7 @@ test('self-hosted login, project tree, pull and authentication failures', async 
   let output = '';
   const disposable = { dispose() {} };
   const vscode = {
+    languages: { createDiagnosticCollection: () => disposable },
     ConfigurationTarget: { Workspace: 2, Global: 1 },
     TreeItemCollapsibleState: { None: 0 },
     TreeItem: class { constructor(label) { this.label = label; } },
@@ -25,7 +27,10 @@ test('self-hosted login, project tree, pull and authentication failures', async 
     Uri: { file: fsPath => ({ fsPath }) },
     workspace: {
       workspaceFolders: [{ uri: { fsPath: process.cwd() } }],
-      getConfiguration: () => ({ get: (key, fallback) => settings[key] ?? fallback, update: async (key, value) => { settings[key] = value; } }),
+      getConfiguration: section => {
+        const values = section === 'latex-workshop' ? latexSettings : settings;
+        return { get: (key, fallback) => values[key] ?? fallback, update: async (key, value) => { values[key] = value; } };
+      },
       onDidSaveTextDocument: () => disposable,
       onDidChangeConfiguration: () => disposable
     },
@@ -64,6 +69,7 @@ test('self-hosted login, project tree, pull and authentication failures', async 
   try { extension = require('../out/extension.js'); } finally { Module._load = original; }
   extension.activate({ subscriptions: [], secrets: { get: async key => stored.get(key), store: async (key, value) => stored.set(key, value) } });
   await new Promise(resolve => setImmediate(resolve));
+  assert.equal(latexSettings['latex.autoBuild.run'], 'never');
   inputs = ['https://custom.example/', 'overleaf.sid=private-cookie'];
   await commands.get('olcli.login')();
   assert.equal(settings.baseUrl, 'https://custom.example');
