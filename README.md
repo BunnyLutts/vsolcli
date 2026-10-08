@@ -79,6 +79,7 @@ npm run compile
 | `olcli.cookieName` | `overleaf_session2` | 服务器使用的会话 cookie 名称。 |
 | `olcli.servers` | `[]` | 已配置的 self-hosted 服务器；登录时自动添加。 |
 | `olcli.debounceMs` | `800` | 自动操作启动前的延迟（毫秒）。 |
+| `olcli.compileTimeout` | `120000` | 云端编译的 HTTP 超时（毫秒）。底层 olcli 默认仅 `10000`，完整 LaTeX 编译经常超过该值。 |
 
 ## Self-hosted 登录与项目面板
 

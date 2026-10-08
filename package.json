@@ -163,6 +163,12 @@
           "default": 800,
           "minimum": 0,
           "description": "Delay before an automatic action starts."
+        },
+        "olcli.compileTimeout": {
+          "type": "number",
+          "default": 120000,
+          "minimum": 1000,
+          "description": "Cloud compile HTTP timeout in milliseconds. The underlying olcli default is 10000, which a full LaTeX compile routinely exceeds."
         }
       }
     }

@@ -255,15 +255,34 @@ async function compileAndDownload(cwd: string, savedFile: string | undefined, ou
     .split('{文件名}').join(sourceName)
     .split('{filename}').join(sourceName);
   const outputPath = path.resolve(cwd, configuredPath);
+  const logPath = outputPath.replace(/\.pdf$/i, '') + '.log';
+  const resource = savedFile?.toLowerCase().endsWith('.tex') ? path.relative(cwd, savedFile) : undefined;
   fs.mkdirSync(path.dirname(outputPath), { recursive: true });
-  const args = ['pdf', '-o', outputPath];
-  if (savedFile?.toLowerCase().endsWith('.tex')) args.push('-r', path.relative(cwd, savedFile));
+
+  // Preferred path: one cloud compile yields both the PDF and the log.
+  const summary = await compileWithClient(outputPath, resource, cwd, output, server);
+  if (summary) {
+    output.appendLine(`cloud compile: ${summary.status} (pdf: ${summary.pdf}, log: ${summary.log})`);
+    if (summary.log) await publishCloudDiagnostics(logPath, cwd, savedFile);
+    if (summary.status !== 'success') {
+      output.show(true);
+      if (summary.log) await vscode.commands.executeCommand('vscode.open', vscode.Uri.file(logPath), { preview: false, preserveFocus: true });
+      throw new Error(`Cloud compilation ${summary.status}${summary.failureHint ? `: ${summary.failureHint}` : ''}`);
+    }
+    if (!summary.pdf) throw new Error('Cloud compilation produced no PDF output');
+    if (config.get<boolean>('autoRefreshPreview', true)) await refreshPdfPreview(outputPath);
+    return;
+  }
+
+  // Fallback when there is no stored session or project marker. The CLI has no
+  // command returning both artifacts, so this costs a second cloud compile.
+  const pdfArgs = ['pdf', '-o', outputPath];
+  if (resource) pdfArgs.push('-r', resource);
   try {
-    await executeCapture(args, cwd, output, undefined, server);
+    await executeCapture(pdfArgs, cwd, output, undefined, server);
   } catch (error) {
-    const logPath = outputPath.replace(/\.pdf$/i, '') + '.log';
     const logArgs = ['output', 'log', '-o', logPath];
-    if (savedFile?.toLowerCase().endsWith('.tex')) logArgs.push('-r', path.relative(cwd, savedFile));
+    if (resource) logArgs.push('-r', resource);
     output.show(true);
     try {
       await executeCapture(logArgs, cwd, output, undefined, server);
@@ -272,16 +291,37 @@ async function compileAndDownload(cwd: string, savedFile: string | undefined, ou
     } catch (logError) { output.appendLine(`Unable to download cloud compile log: ${message(logError)}`); }
     throw error;
   }
-  const logPath = outputPath.replace(/\.pdf$/i, '') + '.log';
   const logArgs = ['output', 'log', '-o', logPath];
-  if (savedFile?.toLowerCase().endsWith('.tex')) logArgs.push('-r', path.relative(cwd, savedFile));
+  if (resource) logArgs.push('-r', resource);
   try {
     await executeCapture(logArgs, cwd, output, undefined, server);
     await publishCloudDiagnostics(logPath, cwd, savedFile);
   } catch (error) { output.appendLine(`Unable to update cloud diagnostics: ${message(error)}`); }
-  if (vscode.workspace.getConfiguration('olcli').get<boolean>('autoRefreshPreview', true)) {
+  if (config.get<boolean>('autoRefreshPreview', true)) {
     await refreshPdfPreview(outputPath);
   }
+}
+
+interface CompileSummary { status: string; pdf: boolean; log: boolean; logPath?: string; failureHint?: string; }
+
+// Compile through the client library so one request produces both the PDF and the
+// compile log. Returns undefined when the wrapper is not usable, so the caller can
+// fall back to the CLI.
+async function compileWithClient(outputPath: string, resource: string | undefined, cwd: string, output: vscode.OutputChannel, server?: Server): Promise<CompileSummary | undefined> {
+  const config = vscode.workspace.getConfiguration('olcli');
+  const baseUrl = server?.url ?? config.get<string>('baseUrl', '').trim();
+  if (!baseUrl) return undefined;
+  if (!fs.existsSync(path.join(cwd, '.olcli.json')) && !fs.existsSync(path.join(cwd, '.olcli-project.json'))) return undefined;
+  const stored = await secrets.get(`olcli:${baseUrl.replace(/\/$/, '')}`);
+  const session = (stored ? JSON.parse(stored) as Record<string, string> : {}).OVERLEAF_SESSION ?? process.env.OVERLEAF_SESSION;
+  if (!session) return undefined;
+  const cookieName = (server?.cookieName ?? config.get<string>('cookieName', '').trim()) || 'overleaf_session2';
+  // The CLI defaults to a 10s HTTP timeout, which a cloud compile routinely exceeds.
+  const timeout = Math.max(1000, config.get<number>('compileTimeout', 120000));
+  const script = path.join(__dirname, '..', 'compile.mjs');
+  const args = [baseUrl, cookieName, String(timeout), outputPath, ...(resource ? [resource] : [])];
+  const text = await spawnCapture(process.execPath, [script, ...args], cwd, output, { OVERLEAF_SESSION: session }, { ELECTRON_RUN_AS_NODE: '1' }, false);
+  return JSON.parse(text) as CompileSummary;
 }
 
 async function publishCloudDiagnostics(logPath: string, cwd: string, savedFile?: string): Promise<void> {
@@ -356,14 +396,19 @@ async function executeCapture(args: string[], cwd: string, output: vscode.Output
   const fullArgs = !environment && baseUrl && !args.includes('--base-url') ? ['--base-url', baseUrl, ...(cookieName ? ['--cookie-name', cookieName] : []), ...args] : args;
   const stored = environment ? undefined : await secrets.get(`olcli:${baseUrl.replace(/\/$/, '')}`);
   const credentials = environment ?? (stored ? JSON.parse(stored) as Record<string, string> : undefined);
-  output.appendLine(`$ ${executable} ${fullArgs.join(' ')}`);
+  return spawnCapture(executable, [...launch.prefix, ...fullArgs], cwd, output, credentials, launch.environment, !environment);
+}
+
+function spawnCapture(executable: string, argv: string[], cwd: string, output: vscode.OutputChannel,
+  credentials?: Record<string, string>, extraEnvironment?: NodeJS.ProcessEnv, echo = true): Promise<string> {
+  output.appendLine(`$ ${executable} ${argv.join(' ')}`);
   return new Promise((resolve, reject) => {
     const env = { ...process.env };
     if (credentials) { delete env.OVERLEAF_SESSION; delete env.OVERLEAF_EMAIL; delete env.OVERLEAF_PASSWORD; }
-    const child = spawn(executable, [...launch.prefix, ...fullArgs], { cwd, env: { ...env, ...credentials, ...launch.environment } });
+    const child = spawn(executable, argv, { cwd, env: { ...env, ...credentials, ...extraEnvironment } });
     let text = '';
     let stderr = '';
-    child.stdout.on('data', data => { text += data.toString(); if (!environment) output.append(data.toString()); });
+    child.stdout.on('data', data => { text += data.toString(); if (echo) output.append(data.toString()); });
     child.stderr.on('data', data => {
       stderr += data.toString();
       output.append(data.toString());
