@@ -84,6 +84,8 @@ class ProjectsProvider implements vscode.TreeDataProvider<Project | ServerNode> 
   private readonly changed = new vscode.EventEmitter<void>();
   readonly onDidChangeTreeData = this.changed.event;
   private items: Array<Project | ServerNode> = [];
+  private loaded = false;
+  private inflight: Promise<Array<Project | ServerNode>> | undefined;
   constructor(private readonly output: vscode.OutputChannel) {}
   getTreeItem(node: Project | ServerNode): vscode.TreeItem {
     if ('server' in node && !('id' in node)) {
@@ -95,11 +97,25 @@ class ProjectsProvider implements vscode.TreeDataProvider<Project | ServerNode> 
     item.command = { command: 'olcli.pullProject', title: 'Pull Project', arguments: [project] };
     return item;
   }
+  private children(node?: ServerNode): Array<Project | ServerNode> {
+    if (node) return this.items.filter(item => 'id' in item && item.server.id === node.server.id);
+    return this.items.filter(item => 'server' in item && !('id' in item));
+  }
   getChildren(node?: ServerNode): Thenable<Array<Project | ServerNode>> {
-    if (node) return Promise.resolve(this.items.filter(item => 'id' in item && item.server.id === node.server.id));
-    return this.refresh().then(() => this.items.filter(item => 'server' in item && !('id' in item)));
+    // Never re-fetch here. refresh() fires onDidChangeTreeData, and VS Code answers
+    // that event by calling getChildren() again, so refreshing from getChildren spins
+    // an unbounded request loop until the server starts returning HTTP 429.
+    if (node || this.loaded) return Promise.resolve(this.children(node));
+    return this.refresh().then(() => this.children(node));
   }
   async refresh(notify = true): Promise<Array<Project | ServerNode>> {
+    // Coalesce concurrent refreshes so a burst of callers runs the CLI once.
+    if (this.inflight) return this.inflight;
+    this.inflight = this.load(notify);
+    try { return await this.inflight; } finally { this.inflight = undefined; }
+  }
+  private async load(notify: boolean): Promise<Array<Project | ServerNode>> {
+    const previous = JSON.stringify(this.items);
     try {
       const servers = vscode.workspace.getConfiguration('olcli').get<Server[]>('servers', []);
       const result: Array<Project | ServerNode> = [];
@@ -114,15 +130,20 @@ class ProjectsProvider implements vscode.TreeDataProvider<Project | ServerNode> 
         }));
       }
       this.items = result;
-      this.changed.fire(); return this.items;
     }
     catch (error) {
-      this.items = []; this.changed.fire();
-      const detail = `Unable to list projects: ${message(error)}`;
+      this.items = [];
+      const detail = `Unable to list projects: ${rateLimitHint(message(error))}`;
       this.output.appendLine(detail);
       if (notify) vscode.window.showErrorMessage(detail);
-      return [];
     }
+    finally {
+      // Mark loaded before firing, so the getChildren() VS Code runs in response to
+      // this event reads the cache instead of starting another fetch.
+      this.loaded = true;
+      if (JSON.stringify(this.items) !== previous) this.changed.fire();
+    }
+    return this.items;
   }
 }
 
@@ -358,5 +379,8 @@ async function executeCapture(args: string[], cwd: string, output: vscode.Output
   });
 }
 function message(error: unknown): string { return error instanceof Error ? error.message : String(error); }
+function rateLimitHint(detail: string): string {
+  return /\b429\b/.test(detail) ? `${detail} (the Overleaf server is rate limiting this client; wait for the limit to reset before retrying)` : detail;
+}
 
 export function deactivate(): void { if (timer) clearTimeout(timer); }
