@@ -8,7 +8,7 @@ import { parseCompileLog } from './diagnostics';
 
 let timer: NodeJS.Timeout | undefined;
 let running = false;
-let queued = false;
+let pending: SyncRequest | undefined;
 let secrets: vscode.SecretStorage;
 let authenticating = false;
 let suppressSaveUntil = 0;
@@ -48,7 +48,10 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand('olcli.pullProject', (project?: Project) => pullProject(project, output, projects)),
     vscode.commands.registerCommand('olcli.openPdfPreview', (uri?: vscode.Uri) => openPdfPreview(uri)),
     vscode.workspace.onDidSaveTextDocument(document => {
-      if (running || Date.now() < suppressSaveUntil) return;
+      // Deliberately not gated on `running`: a save during a long sync or cloud
+      // compile used to be discarded outright, so edits made while a run was in
+      // flight were never synced. It now debounces and coalesces into `pending`.
+      if (Date.now() < suppressSaveUntil) return;
       const config = vscode.workspace.getConfiguration('olcli');
       const project = projectRootFor(document.uri.fsPath);
       output.appendLine(`saved: ${document.uri.fsPath} (project: ${project ?? 'none'})`);
@@ -79,6 +82,9 @@ async function disableLocalLatexBuild(): Promise<void> {
 interface Server { id: string; name: string; url: string; cookieName: string; }
 interface Project { id: string; name: string; server: Server; }
 interface ServerNode { server: Server; }
+// The most recent sync request. A save that lands while a run is in progress
+// replaces this instead of being dropped, and is served when that run finishes.
+interface SyncRequest { compile: boolean; projectDirectory?: string; savedFile?: string; server?: Server; }
 
 class ProjectsProvider implements vscode.TreeDataProvider<Project | ServerNode> {
   private readonly changed = new vscode.EventEmitter<void>();
@@ -229,7 +235,7 @@ function serverForProject(directory: string): Server | undefined {
 }
 
 async function syncAndMaybeCompile(compile: boolean, output: vscode.OutputChannel, projectDirectory?: string, savedFile?: string, server?: Server): Promise<void> {
-  if (running) { queued = true; return; }
+  if (running) { pending = { compile, projectDirectory, savedFile, server }; return; }
   const cwd = projectDirectory ?? root();
   if (!cwd) { vscode.window.showWarningMessage('olcli: open a workspace or set olcli.projectRoot.'); return; }
   running = true;
@@ -244,7 +250,9 @@ async function syncAndMaybeCompile(compile: boolean, output: vscode.OutputChanne
   } finally {
     running = false;
     suppressSaveUntil = Date.now() + 1500;
-    if (queued) { queued = false; void syncAndMaybeCompile(compile, output, projectDirectory, savedFile, server); }
+    const next = pending;
+    pending = undefined;
+    if (next) void syncAndMaybeCompile(next.compile, output, next.projectDirectory, next.savedFile, next.server);
   }
 }
 
@@ -320,7 +328,11 @@ async function compileWithClient(outputPath: string, resource: string | undefine
   const timeout = Math.max(1000, config.get<number>('compileTimeout', 120000));
   const script = path.join(__dirname, '..', 'compile.mjs');
   const args = [baseUrl, cookieName, String(timeout), outputPath, ...(resource ? [resource] : [])];
-  const text = await spawnCapture(process.execPath, [script, ...args], cwd, output, { OVERLEAF_SESSION: session }, { ELECTRON_RUN_AS_NODE: '1' }, false);
+  // Backstop for a process that never exits. Each request is individually capped
+  // at `timeout`, and a run makes three of them (compile, PDF, log) plus the
+  // bootstrap, so scale past that rather than sitting just above one request.
+  const processTimeout = timeout * 4;
+  const text = await spawnCapture(process.execPath, [script, ...args], cwd, output, { OVERLEAF_SESSION: session }, { ELECTRON_RUN_AS_NODE: '1' }, false, processTimeout);
   return JSON.parse(text) as CompileSummary;
 }
 
@@ -370,7 +382,7 @@ async function openPdfPreview(uri?: vscode.Uri): Promise<void> {
 }
 
 async function compileOnly(output: vscode.OutputChannel): Promise<void> {
-  if (running) { queued = true; return; }
+  if (running) { pending = { compile: true, projectDirectory: root() }; return; }
   const cwd = root();
   if (!cwd) { vscode.window.showWarningMessage('olcli: open a workspace or set olcli.projectRoot.'); return; }
   running = true;
@@ -379,7 +391,12 @@ async function compileOnly(output: vscode.OutputChannel): Promise<void> {
     vscode.window.setStatusBarMessage('olcli: compiled', 3000);
   } catch (error) {
     vscode.window.showErrorMessage(`olcli failed: ${error instanceof Error ? error.message : String(error)}`);
-  } finally { running = false; }
+  } finally {
+    running = false;
+    const next = pending;
+    pending = undefined;
+    if (next) void syncAndMaybeCompile(next.compile, output, next.projectDirectory, next.savedFile, next.server);
+  }
 }
 
 async function execute(command: string, cwd: string, output: vscode.OutputChannel, server?: Server): Promise<void> {
@@ -400,7 +417,7 @@ async function executeCapture(args: string[], cwd: string, output: vscode.Output
 }
 
 function spawnCapture(executable: string, argv: string[], cwd: string, output: vscode.OutputChannel,
-  credentials?: Record<string, string>, extraEnvironment?: NodeJS.ProcessEnv, echo = true): Promise<string> {
+  credentials?: Record<string, string>, extraEnvironment?: NodeJS.ProcessEnv, echo = true, processTimeoutMs = 0): Promise<string> {
   output.appendLine(`$ ${executable} ${argv.join(' ')}`);
   return new Promise((resolve, reject) => {
     const env = { ...process.env };
@@ -408,19 +425,34 @@ function spawnCapture(executable: string, argv: string[], cwd: string, output: v
     const child = spawn(executable, argv, { cwd, env: { ...env, ...credentials, ...extraEnvironment } });
     let text = '';
     let stderr = '';
+    let settled = false;
+    // A child that never exits would leave `running` set forever and silently
+    // swallow every later save, so give long-running commands a hard ceiling.
+    const watchdog = processTimeoutMs > 0 ? setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      child.kill();
+      reject(new Error(`${path.basename(argv[0] ?? executable)} did not finish within ${Math.round(processTimeoutMs / 1000)}s`));
+    }, processTimeoutMs) : undefined;
+    const finish = (run: () => void) => {
+      if (settled) return;
+      settled = true;
+      if (watchdog) clearTimeout(watchdog);
+      run();
+    };
     child.stdout.on('data', data => { text += data.toString(); if (echo) output.append(data.toString()); });
     child.stderr.on('data', data => {
       stderr += data.toString();
       output.append(data.toString());
     });
-    child.on('error', (error: NodeJS.ErrnoException) => reject(error.code === 'ENOENT'
+    child.on('error', (error: NodeJS.ErrnoException) => finish(() => reject(error.code === 'ENOENT'
       ? new Error(`Cannot start ${executable}. Install olcli or set olcli.executable to its absolute path; also check that the project directory exists.`)
-      : error));
-    child.on('close', code => {
+      : error)));
+    child.on('close', code => finish(() => {
       if (code === 0) { resolve(text); return; }
       const detail = stderr.replace(/\u001b\[[0-9;]*m/g, '').trim();
       reject(new Error(detail || `command exited with code ${code}`));
-    });
+    }));
   });
 }
 function message(error: unknown): string { return error instanceof Error ? error.message : String(error); }

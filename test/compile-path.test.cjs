@@ -28,6 +28,7 @@ function harness({ projectRoot, storedSession }) {
     servers: [{ id: 's', name: 'overleaf.example', url: 'https://overleaf.example', cookieName: 'overleaf_session2' }]
   };
 
+  let onSave;
   const vscode = {
     languages: { createDiagnosticCollection: () => ({ ...disposable, clear() {}, set() {} }) },
     ConfigurationTarget: { Workspace: 2, Global: 1 },
@@ -42,7 +43,7 @@ function harness({ projectRoot, storedSession }) {
       workspaceFolders: [{ uri: { fsPath: projectRoot } }],
       getConfiguration: () => ({ get: (key, fallback) => settings[key] ?? fallback, update: async () => {} }),
       fs: { stat: async () => ({}) },
-      onDidSaveTextDocument: () => disposable,
+      onDidSaveTextDocument: handler => { onSave = handler; return disposable; },
       onDidChangeConfiguration: () => disposable
     },
     window: {
@@ -61,12 +62,15 @@ function harness({ projectRoot, storedSession }) {
     }
   };
 
+  const held = [];
+  let holdMatch;
   const spawn = (executable, argv, options) => {
     calls.push({ executable, argv, options });
     const child = new EventEmitter();
     child.stdout = new EventEmitter();
     child.stderr = new EventEmitter();
-    queueMicrotask(() => {
+    child.kill = () => {};
+    const finish = () => {
       // argv is [cli.js, ...] for the real CLI, or [compile.mjs, baseUrl, cookieName, timeout, pdfPath, resource].
       if (argv[0].endsWith('compile.mjs')) {
         const pdfPath = argv[4];
@@ -78,7 +82,10 @@ function harness({ projectRoot, storedSession }) {
         fs.writeFileSync(argv[argv.indexOf('-o') + 1], 'main.tex:3: Undefined control sequence.\n');
       }
       child.emit('close', 0);
-    });
+    };
+    // `hold` keeps matching commands in flight so a test can act mid-run.
+    if (holdMatch && argv.join(' ').includes(holdMatch)) held.push(finish);
+    else queueMicrotask(finish);
     return child;
   };
 
@@ -96,7 +103,9 @@ function harness({ projectRoot, storedSession }) {
     extension = require('../out/extension.js');
   } finally { Module._load = original; }
   extension.activate({ subscriptions: [], secrets: { get: async key => stored.get(key), store: async (key, value) => stored.set(key, value) } });
-  return { extension, commands, calls, opened, errors, settings, get output() { return output; } };
+  return { extension, commands, calls, opened, errors, settings, save: doc => onSave(doc),
+    hold: match => { holdMatch = match; }, release: () => { const next = held.shift(); if (next) next(); },
+    heldCount: () => held.length, get output() { return output; } };
 }
 
 const tick = () => new Promise(resolve => setImmediate(resolve));
@@ -156,6 +165,67 @@ test('without a stored session the CLI fallback still compiles', async () => {
     assert.equal(h.calls.filter(call => call.argv.includes('pdf')).length, 1);
     assert.equal(h.calls.filter(call => call.argv.includes('output')).length, 1);
     assert.equal(h.calls.filter(call => call.argv[0].endsWith('compile.mjs')).length, 0);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('saving a .tex file triggers sync automatically', async () => {
+  delete process.env.OVERLEAF_SESSION;
+  const root = projectDir('vsolcli-save-trigger-');
+  try {
+    const h = harness({ projectRoot: root, storedSession: { OVERLEAF_SESSION: 'test-session' } });
+    h.save({ uri: { fsPath: path.join(root, 'main.tex') } });
+    await waitFor(() => h.calls.some(call => call.argv.includes('sync')), 'the debounced sync', 4000);
+    assert.equal(h.calls.filter(call => call.argv.includes('sync')).length, 1, 'save should sync once');
+    assert.ok(h.output.includes('saved:'), 'the save handler should log the save');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('a save during a long run is coalesced, not dropped', async () => {
+  delete process.env.OVERLEAF_SESSION;
+  const root = projectDir('vsolcli-coalesce-');
+  try {
+    const h = harness({ projectRoot: root, storedSession: { OVERLEAF_SESSION: 'test-session' } });
+    h.settings.debounceMs = 20;
+    h.hold('sync');
+    h.save({ uri: { fsPath: path.join(root, 'a.tex') } });
+    await waitFor(() => h.heldCount() === 1, 'the first sync to be held');
+    assert.equal(h.calls.filter(call => call.argv.includes('sync')).length, 1);
+
+    // Wait past the run's own suppression window, then save again mid-run. The old
+    // handler returned early on `running`, so this save was discarded and the edit
+    // was never synced.
+    await new Promise(resolve => setTimeout(resolve, 3200));
+    h.save({ uri: { fsPath: path.join(root, 'b.tex') } });
+    await new Promise(resolve => setTimeout(resolve, 150));
+    assert.ok(h.output.includes('saved:'), 'a mid-run save must still be accepted');
+
+    h.release();
+    await waitFor(() => h.calls.filter(call => call.argv.includes('sync')).length === 2, 'the coalesced second sync', 4000);
+    assert.equal(h.calls.filter(call => call.argv.includes('sync')).length, 2, 'exactly one coalesced re-run');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('a compile that never exits is aborted instead of wedging sync', async () => {
+  delete process.env.OVERLEAF_SESSION;
+  const root = projectDir('vsolcli-watchdog-');
+  try {
+    const h = harness({ projectRoot: root, storedSession: { OVERLEAF_SESSION: 'test-session' } });
+    h.settings.debounceMs = 20;
+    h.settings.compileTimeout = 1000; // watchdog = compileTimeout * 4
+    h.hold('compile.mjs');            // the wrapper never exits
+    h.save({ uri: { fsPath: path.join(root, 'main.tex') } });
+
+    await waitFor(() => h.errors.some(text => /did not finish/.test(text)), 'the watchdog to abort the compile', 8000);
+    // If `running` were still set, the command would be swallowed and no sync would follow.
+    const before = h.calls.filter(call => call.argv.includes('sync')).length;
+    await h.commands.get('olcli.syncAndCompileCurrent')();
+    await waitFor(() => h.calls.filter(call => call.argv.includes('sync')).length > before, 'a follow-up run', 4000);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
