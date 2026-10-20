@@ -12,6 +12,12 @@ out/
 # olcli local project mapping
 .olcli-project.json
 
+# olcli conflict-aware sync state (per machine; never share or commit)
+.olcli-sync-state.json
+.olcli-base/
+.olcli-conflicts/
+.olcli-sync.lock
+
 # Logs
 *.log
 npm-debug.log*

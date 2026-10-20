@@ -3,3 +3,19 @@ src/**
 tsconfig.json
 *.map
 test/**
+
+# pdf.js ships alternate builds, type definitions and a bundled viewer we never
+# load: the preview only reads build/pdf.min.js, build/pdf.worker.min.js,
+# cmaps/, standard_fonts/ and LICENSE.
+node_modules/pdfjs-dist/legacy/**
+node_modules/pdfjs-dist/web/**
+node_modules/pdfjs-dist/types/**
+node_modules/pdfjs-dist/image_decoders/**
+node_modules/pdfjs-dist/**/*.map
+node_modules/pdfjs-dist/README.md
+node_modules/pdfjs-dist/CODE_OF_CONDUCT.md
+node_modules/pdfjs-dist/webpack.js
+node_modules/pdfjs-dist/build/pdf.js
+node_modules/pdfjs-dist/build/pdf.worker.js
+node_modules/pdfjs-dist/build/pdf.sandbox.js
+node_modules/pdfjs-dist/build/pdf.sandbox.min.js

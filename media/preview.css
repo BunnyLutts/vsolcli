@@ -1,0 +1,180 @@
+/*
+ * olcli PDF 预览 webview 样式。
+ * 颜色全部走 VS Code 主题变量，深浅色与高对比主题下都自动跟随；
+ * 工具栏用不透明底色 + sticky，长文档滚动时页码/缩放控件不会和纸面糊在一起。
+ */
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--vscode-editor-background);
+  color: var(--vscode-editor-foreground);
+  font-family: var(--vscode-font-family);
+  font-size: var(--vscode-font-size);
+}
+
+/* ── 工具栏 ─────────────────────────────────────────────────────────── */
+
+#toolbar {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  /* 必须不透明：半透明底色会让滚动中的纸面透上来 */
+  background: var(--vscode-editorWidget-background, var(--vscode-editor-background));
+  border-bottom: 1px solid var(--vscode-panel-border);
+  white-space: nowrap;
+}
+
+.preview-name {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 40vw;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-weight: 600;
+}
+
+.preview-pages,
+.preview-zoom {
+  flex: 0 0 auto;
+  color: var(--vscode-descriptionForeground);
+  font-variant-numeric: tabular-nums;
+}
+
+.preview-zoom {
+  min-width: 3.5em;
+  text-align: center;
+}
+
+.preview-spacer {
+  flex: 1 1 auto;
+}
+
+.preview-button {
+  flex: 0 0 auto;
+  padding: 2px 8px;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  background: var(--vscode-button-secondaryBackground, transparent);
+  color: var(--vscode-button-secondaryForeground, var(--vscode-editor-foreground));
+  font-family: inherit;
+  font-size: inherit;
+  line-height: 1.6;
+  cursor: pointer;
+}
+
+.preview-button:hover:not(:disabled) {
+  background: var(--vscode-button-secondaryHoverBackground, var(--vscode-button-background));
+  color: var(--vscode-button-foreground);
+}
+
+.preview-button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.preview-button:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder);
+  outline-offset: 1px;
+}
+
+/* ── 页面滚动区 ─────────────────────────────────────────────────────── */
+
+#pages {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  padding: 12px;
+}
+
+.preview-stack {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+}
+
+.preview-page {
+  position: relative;
+  flex: 0 0 auto;
+  /* 白纸底：渲染前先用它撑住视觉，canvas 透明时也靠它 */
+  background: #ffffff;
+  /* 用 box-shadow 画边线和投影，不占布局尺寸，适宽计算才不会差 1~2px */
+  box-shadow: 0 0 0 1px var(--vscode-panel-border),
+    0 2px 8px var(--vscode-widget-shadow, rgba(0, 0, 0, 0.3));
+}
+
+.preview-canvas {
+  display: block;
+}
+
+.preview-page-error {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: var(--vscode-editorWidget-background);
+  color: var(--vscode-errorForeground, var(--vscode-editor-foreground));
+  font-size: inherit;
+  text-align: center;
+  word-break: break-word;
+}
+
+/* ── 提示与错误 ─────────────────────────────────────────────────────── */
+
+.preview-loading,
+.preview-error {
+  max-width: 60ch;
+  margin: 24px auto;
+  padding: 16px;
+  border-radius: 4px;
+  background: var(--vscode-editorWidget-background, transparent);
+  color: var(--vscode-editor-foreground);
+  text-align: center;
+  word-break: break-word;
+}
+
+.preview-loading {
+  color: var(--vscode-descriptionForeground);
+}
+
+.preview-error {
+  border: 1px solid var(--vscode-panel-border);
+}
+
+.preview-error-title {
+  margin-bottom: 8px;
+  font-weight: 600;
+}
+
+.preview-error-detail {
+  color: var(--vscode-descriptionForeground);
+  line-height: 1.6;
+  user-select: text;
+}
+
+/* 高对比主题下阴影不可见，靠描边把纸面边界交代清楚 */
+body.vscode-high-contrast .preview-page {
+  box-shadow: 0 0 0 1px var(--vscode-contrastBorder, var(--vscode-panel-border));
+}

@@ -5,14 +5,20 @@ import * as fs from 'node:fs';
 import { cliLaunch } from './executable';
 import { parseSessionCookie } from './login';
 import { parseCompileLog } from './diagnostics';
+import { newestPdfIn, pdfPathFor, sourceNameFor } from './pdfPath';
+import { PdfPreview } from './preview';
+import { periodicDelayMs } from './autoSync';
 
 let timer: NodeJS.Timeout | undefined;
+let periodicTimer: NodeJS.Timeout | undefined;
+let periodicFailures = 0;
+let lastConflictSignature = '';
 let running = false;
 let pending: SyncRequest | undefined;
 let secrets: vscode.SecretStorage;
 let authenticating = false;
-let suppressSaveUntil = 0;
 let cloudDiagnostics: vscode.DiagnosticCollection;
+let preview: PdfPreview | undefined;
 
 export function activate(context: vscode.ExtensionContext): void {
   secrets = context.secrets;
@@ -23,13 +29,20 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(output);
   const projects = new ProjectsProvider(output);
   context.subscriptions.push(vscode.window.registerTreeDataProvider('olcli.projects', projects));
+  preview = new PdfPreview(context, output);
+  context.subscriptions.push(preview);
   void projects.refresh(false);
 
   const run = (compile: boolean, automatic = false, projectDirectory?: string, savedFile?: string, server?: Server) => {
     if (!enabled()) return;
     if (automatic) {
       clearTimeout(timer);
-      timer = setTimeout(() => void syncAndMaybeCompile(compile, output, projectDirectory, savedFile, server), debounceMs());
+      timer = setTimeout(() => {
+        // Clear the handle before running: a stale handle would make the
+        // periodic tick believe a save-triggered sync is forever pending.
+        timer = undefined;
+        void syncAndMaybeCompile(compile, output, projectDirectory, savedFile, server);
+      }, debounceMs());
     } else void syncAndMaybeCompile(compile, output, projectDirectory, savedFile, server);
   };
 
@@ -46,12 +59,14 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand('olcli.login', async () => { if (await login(output)) await projects.refresh(); }),
     vscode.commands.registerCommand('olcli.listProjects', () => projects.refresh()),
     vscode.commands.registerCommand('olcli.pullProject', (project?: Project) => pullProject(project, output, projects)),
-    vscode.commands.registerCommand('olcli.openPdfPreview', (uri?: vscode.Uri) => openPdfPreview(uri)),
+    vscode.commands.registerCommand('olcli.openPdfPreview', (uri?: vscode.Uri) => openPdfPreview(uri, output)),
+    vscode.commands.registerCommand('olcli.resolveConflictsLocal', () => void resolveConflicts('local', output)),
+    vscode.commands.registerCommand('olcli.resolveConflictsRemote', () => void resolveConflicts('remote', output)),
     vscode.workspace.onDidSaveTextDocument(document => {
       // Deliberately not gated on `running`: a save during a long sync or cloud
-      // compile used to be discarded outright, so edits made while a run was in
-      // flight were never synced. It now debounces and coalesces into `pending`.
-      if (Date.now() < suppressSaveUntil) return;
+      // compile is coalesced into `pending` instead of being discarded. There is
+      // no time-based suppression window: swallowing saves to avoid a re-run is
+      // what used to lose edits made right after a sync started.
       const config = vscode.workspace.getConfiguration('olcli');
       const project = projectRootFor(document.uri.fsPath);
       output.appendLine(`saved: ${document.uri.fsPath} (project: ${project ?? 'none'})`);
@@ -62,9 +77,13 @@ export function activate(context: vscode.ExtensionContext): void {
       if (event.affectsConfiguration('latex-workshop.latex.autoBuild.run') || event.affectsConfiguration('olcli.disableLatexWorkshopOnSave')) {
         void disableLocalLatexBuild().catch(error => vscode.window.showErrorMessage(message(error)));
       }
-      if (event.affectsConfiguration('olcli') && vscode.workspace.getConfiguration('olcli').get<boolean>('syncOnConfigurationChange', true)) run(true, true);
+      if (event.affectsConfiguration('olcli.autoSyncInterval') || event.affectsConfiguration('olcli.enabled')) armPeriodicSync(output);
+      // Changing the interval alone must not kick off a sync+compile; only the
+      // settings that affect what a sync does should.
+      if (affectsSyncSettings(event) && vscode.workspace.getConfiguration('olcli').get<boolean>('syncOnConfigurationChange', true)) run(true, true);
     })
   );
+  armPeriodicSync(output);
   output.appendLine('olcli extension activated.');
 }
 
@@ -84,7 +103,27 @@ interface Project { id: string; name: string; server: Server; }
 interface ServerNode { server: Server; }
 // The most recent sync request. A save that lands while a run is in progress
 // replaces this instead of being dropped, and is served when that run finishes.
-interface SyncRequest { compile: boolean; projectDirectory?: string; savedFile?: string; server?: Server; }
+interface SyncRequest { compile: boolean; projectDirectory?: string; savedFile?: string; server?: Server; background?: boolean; }
+
+interface SyncConflict { path: string; kind: string; }
+// Summary printed by sync-guard.mjs. Counts are present on every completed run;
+// `skipped` is set when a concurrent run holds the project lock.
+interface SafeSyncSummary {
+  projectId?: string;
+  skipped?: boolean;
+  reason?: string;
+  pulled?: number;
+  pushed?: number;
+  deletedRemote?: number;
+  deletedLocal?: number;
+  merged?: number;
+  unchanged?: number;
+  conflicts?: SyncConflict[];
+  errors?: Array<{ path: string; message: string }>;
+  conflictsDir?: string | null;
+}
+
+type ConflictPreference = 'local' | 'remote';
 
 class ProjectsProvider implements vscode.TreeDataProvider<Project | ServerNode> {
   private readonly changed = new vscode.EventEmitter<void>();
@@ -234,26 +273,206 @@ function serverForProject(directory: string): Server | undefined {
   } catch { return undefined; }
 }
 
-async function syncAndMaybeCompile(compile: boolean, output: vscode.OutputChannel, projectDirectory?: string, savedFile?: string, server?: Server): Promise<void> {
-  if (running) { pending = { compile, projectDirectory, savedFile, server }; return; }
+async function syncAndMaybeCompile(compile: boolean, output: vscode.OutputChannel, projectDirectory?: string, savedFile?: string, server?: Server, background = false): Promise<boolean> {
+  if (running) { pending = { compile, projectDirectory, savedFile, server, background }; return false; }
   const cwd = projectDirectory ?? root();
-  if (!cwd) { vscode.window.showWarningMessage('olcli: open a workspace or set olcli.projectRoot.'); return; }
+  if (!cwd) {
+    if (!background) vscode.window.showWarningMessage('olcli: open a workspace or set olcli.projectRoot.');
+    return false;
+  }
   running = true;
-  suppressSaveUntil = Date.now() + 3000;
   try {
     await disableLocalLatexBuild();
-    await execute('sync', cwd, output, server);
+    const outcome = await syncProject(cwd, output, server);
+    if (outcome.skipped) {
+      output.appendLine('sync skipped: another sync is already running for this project; it will be retried on the next save or interval');
+      return false;
+    }
+    if (outcome.conflicts.length > 0) {
+      reportConflicts(outcome.conflicts, cwd, output);
+      output.appendLine(`cloud compile skipped: ${outcome.conflicts.length} unresolved sync conflict(s)`);
+      return false;
+    }
+    lastConflictSignature = '';
+    // Any successful run (save or interval) means the server is reachable
+    // again, so the next background tick can go back to the base interval.
+    periodicFailures = 0;
     if (compile) await compileAndDownload(cwd, savedFile, output, server);
-    vscode.window.setStatusBarMessage(compile ? 'olcli: synced, cloud compiled, and downloaded' : 'olcli: synced', 3000);
+    if (!background) vscode.window.setStatusBarMessage(compile ? 'olcli: synced, cloud compiled, and downloaded' : 'olcli: synced', 3000);
+    return true;
   } catch (error) {
-    vscode.window.showErrorMessage(`olcli failed: ${error instanceof Error ? error.message : String(error)}`);
+    if (background) output.appendLine(`olcli background sync failed: ${message(error)}`);
+    else vscode.window.showErrorMessage(`olcli failed: ${message(error)}`);
+    return false;
   } finally {
     running = false;
-    suppressSaveUntil = Date.now() + 1500;
+    armPeriodicSync(output);
     const next = pending;
     pending = undefined;
-    if (next) void syncAndMaybeCompile(next.compile, output, next.projectDirectory, next.savedFile, next.server);
+    if (next) void syncAndMaybeCompile(next.compile, output, next.projectDirectory, next.savedFile, next.server, next.background);
   }
+}
+
+/** Result of a sync attempt: unresolved conflicts, or a skipped concurrent run. */
+interface SyncOutcome { conflicts: SyncConflict[]; skipped: boolean; }
+
+/**
+ * Sync one project directory and return unresolved conflicts (empty on success).
+ *
+ * The conflict-aware sidecar is used whenever the extension has a session to
+ * hand it; otherwise this falls back to plain `olcli sync`, which has the old
+ * blind-overwrite semantics.
+ */
+async function syncProject(cwd: string, output: vscode.OutputChannel, server?: Server, prefer?: ConflictPreference): Promise<SyncOutcome> {
+  const summary = await runSafeSync(cwd, output, server, prefer);
+  if (!summary) {
+    if (prefer) throw new Error('resolving conflicts needs a stored olcli session; log in first, then retry');
+    output.appendLine('safe sync unavailable (no stored session or project marker); falling back to `olcli sync` without conflict detection');
+    await execute('sync', cwd, output, server);
+    return { conflicts: [], skipped: false };
+  }
+  if (summary.skipped) {
+    output.appendLine(`sync skipped: ${summary.reason ?? 'another sync is already running'}`);
+    return { conflicts: [], skipped: true };
+  }
+  if (summary.conflictsDir) output.appendLine(`conflict copies: ${summary.conflictsDir}`);
+  if (summary.merged) output.appendLine(`auto-merged ${summary.merged} file(s) with a three-way merge`);
+  output.appendLine(`sync: pulled ${summary.pulled ?? 0}, pushed ${summary.pushed ?? 0}, deleted remote ${summary.deletedRemote ?? 0}, deleted local ${summary.deletedLocal ?? 0}, unchanged ${summary.unchanged ?? 0}`);
+  if (summary.errors?.length) {
+    for (const failure of summary.errors) output.appendLine(`sync error: ${failure.path}: ${failure.message}`);
+    throw new Error(`${summary.errors.length} file operation(s) failed; see the olcli output`);
+  }
+  return { conflicts: (summary.conflicts ?? []).map(conflict => ({ path: conflict.path, kind: conflict.kind })), skipped: false };
+}
+
+/**
+ * Run the conflict-aware sync sidecar, mirroring the session plumbing of the
+ * compile wrapper (compile.mjs). Returns undefined when its prerequisites are
+ * missing, so callers can fall back to the CLI.
+ */
+async function runSafeSync(cwd: string, output: vscode.OutputChannel, server?: Server, prefer?: ConflictPreference): Promise<SafeSyncSummary | undefined> {
+  const config = vscode.workspace.getConfiguration('olcli');
+  const baseUrl = (server?.url ?? config.get<string>('baseUrl', '').trim()).replace(/\/$/, '');
+  if (!baseUrl) return undefined;
+  if (!fs.existsSync(path.join(cwd, '.olcli.json')) && !fs.existsSync(path.join(cwd, '.olcli-project.json'))) return undefined;
+  const stored = await secrets.get(`olcli:${baseUrl}`);
+  const session = (stored ? JSON.parse(stored) as Record<string, string> : {}).OVERLEAF_SESSION ?? process.env.OVERLEAF_SESSION;
+  if (!session) return undefined;
+  const cookieName = (server?.cookieName ?? config.get<string>('cookieName', '').trim()) || 'overleaf_session2';
+  const timeout = Math.max(1000, config.get<number>('syncTimeout', 60000));
+  const environment: Record<string, string> = { ELECTRON_RUN_AS_NODE: '1' };
+  const protectedPaths = dirtyProjectDocuments(cwd);
+  if (protectedPaths.length > 0) environment.OLCLI_PROTECTED_PATHS = JSON.stringify(protectedPaths);
+  const script = path.join(__dirname, '..', 'sync-guard.mjs');
+  const args = [baseUrl, cookieName, String(timeout), ...(prefer === 'local' ? ['--prefer-local'] : prefer === 'remote' ? ['--prefer-remote'] : [])];
+  const text = await spawnCapture(process.execPath, [script, ...args], cwd, output, { OVERLEAF_SESSION: session }, environment, false, timeout * 4);
+  let summary: SafeSyncSummary;
+  try { summary = JSON.parse(text) as SafeSyncSummary; } catch { throw new Error('sync-guard.mjs returned an invalid summary'); }
+  return summary;
+}
+
+/** Project-relative paths of dirty documents, passed to the sidecar as protection. */
+function dirtyProjectDocuments(cwd: string): string[] {
+  return vscode.workspace.textDocuments
+    .filter(document => document.isDirty && document.uri.scheme === 'file' && isWithin(document.uri.fsPath, cwd))
+    .map(document => path.relative(cwd, document.uri.fsPath).split(path.sep).join('/'));
+}
+
+/** Report conflicts once per distinct set, and offer the copies folder. */
+function reportConflicts(conflicts: SyncConflict[], cwd: string, output: vscode.OutputChannel): void {
+  for (const conflict of conflicts) output.appendLine(`conflict: ${conflict.path} (${describeConflict(conflict.kind)})`);
+  const signature = conflicts.map(conflict => `${conflict.path}:${conflict.kind}`).sort().join('|');
+  if (signature === lastConflictSignature) return;
+  lastConflictSignature = signature;
+  const label = conflicts.length === 1 ? conflicts[0].path : `${conflicts.length} files`;
+  void vscode.window.showWarningMessage(`olcli: ${label} changed both locally and in Overleaf, so both versions were kept. Remote copies are in .olcli-conflicts/.`, 'Show Conflicts').then(choice => {
+    if (choice === 'Show Conflicts') void vscode.commands.executeCommand('revealFileInOS', vscode.Uri.file(path.join(cwd, '.olcli-conflicts')));
+  });
+}
+
+function describeConflict(kind: string): string {
+  switch (kind) {
+    case 'both-modified': return 'changed on both sides';
+    case 'both-added': return 'created on both sides with different content';
+    case 'local-deleted-remote-modified': return 'deleted locally but edited in Overleaf';
+    case 'remote-deleted-local-modified': return 'deleted in Overleaf but edited locally';
+    case 'local-unsaved': return 'has unsaved editor changes';
+    case 'changed-during-sync': return 'changed while the sync was running';
+    default: return kind;
+  }
+}
+
+/** Explicitly resolve every conflict in the project one way (manual command). */
+async function resolveConflicts(prefer: ConflictPreference, output: vscode.OutputChannel): Promise<void> {
+  if (!enabled()) return;
+  const cwd = root();
+  if (!cwd) { vscode.window.showWarningMessage('olcli: open a workspace or set olcli.projectRoot.'); return; }
+  if (running) { vscode.window.showWarningMessage('olcli: a sync is already running.'); return; }
+  running = true;
+  try {
+    const outcome = await syncProject(cwd, output, serverForProject(cwd), prefer);
+    if (outcome.skipped) {
+      vscode.window.showWarningMessage('olcli: another sync is already running for this project; try again when it finishes.');
+    } else if (outcome.conflicts.length > 0) {
+      reportConflicts(outcome.conflicts, cwd, output);
+    } else {
+      lastConflictSignature = '';
+      vscode.window.showInformationMessage(`olcli: conflicts resolved, kept the ${prefer === 'local' ? 'local files' : 'Overleaf versions'}.`);
+    }
+  } catch (error) {
+    vscode.window.showErrorMessage(`olcli failed: ${message(error)}`);
+  } finally {
+    running = false;
+    armPeriodicSync(output);
+    const next = pending;
+    pending = undefined;
+    if (next) void syncAndMaybeCompile(next.compile, output, next.projectDirectory, next.savedFile, next.server, next.background);
+  }
+}
+
+// ─── Periodic background sync ───────────────────────────────────────────────
+
+function periodicIntervalMs(): number {
+  const seconds = vscode.workspace.getConfiguration('olcli').get<number>('autoSyncInterval', 0);
+  return Number.isFinite(seconds) && seconds > 0 ? Math.round(seconds * 1000) : 0;
+}
+
+/** (Re)arm the background sync timer; a no-op when the setting is 0 or disabled. */
+function armPeriodicSync(output: vscode.OutputChannel): void {
+  if (periodicTimer) { clearTimeout(periodicTimer); periodicTimer = undefined; }
+  const interval = periodicIntervalMs();
+  if (!interval || !enabled()) return;
+  const delay = periodicDelayMs(interval, periodicFailures);
+  periodicTimer = setTimeout(() => {
+    periodicTimer = undefined;
+    void periodicSyncTick(output).finally(() => armPeriodicSync(output));
+  }, delay);
+}
+
+async function periodicSyncTick(output: vscode.OutputChannel): Promise<void> {
+  if (!enabled()) return;
+  const cwd = root();
+  if (!cwd || !fs.existsSync(path.join(cwd, '.olcli.json'))) return;
+  // Never queue behind a save-triggered run: that run already serves the newer
+  // request, and a queued background sync would only repeat the download.
+  if (running) { output.appendLine('periodic sync skipped: another sync is running'); return; }
+  // A save is already waiting for its debounce window; let it run first so the
+  // interval does not cause a second full download right before it.
+  if (timer) { output.appendLine('periodic sync skipped: a save-triggered sync is pending'); return; }
+  if (dirtyProjectDocuments(cwd).length > 0) { output.appendLine('periodic sync skipped: unsaved editor changes'); return; }
+  output.appendLine('periodic sync starting');
+  const success = await syncAndMaybeCompile(false, output, cwd, undefined, serverForProject(cwd), true);
+  periodicFailures = success ? 0 : periodicFailures + 1;
+}
+
+/** Settings that change what a sync does; changing them re-runs a manual sync. */
+const SYNC_SETTINGS = [
+  'enabled', 'autoSyncOnSave', 'autoCompileOnSave', 'disableLatexWorkshopOnSave',
+  'pdfOutput', 'autoRefreshPreview', 'syncOnConfigurationChange', 'projectRoot',
+  'executable', 'baseUrl', 'cookieName', 'servers', 'debounceMs', 'compileTimeout', 'syncTimeout'
+];
+function affectsSyncSettings(event: vscode.ConfigurationChangeEvent): boolean {
+  return SYNC_SETTINGS.some(key => event.affectsConfiguration(`olcli.${key}`));
 }
 
 async function compileAndDownload(cwd: string, savedFile: string | undefined, output: vscode.OutputChannel, server?: Server): Promise<void> {
@@ -354,31 +573,32 @@ async function publishCloudDiagnostics(logPath: string, cwd: string, savedFile?:
 }
 
 async function refreshPdfPreview(pdfPath: string): Promise<void> {
-  const pdf = vscode.Uri.file(pdfPath);
-  try { await vscode.workspace.fs.stat(pdf); } catch { return; }
-  await vscode.commands.executeCommand('vscode.open', pdf, {
-    viewColumn: vscode.ViewColumn.Beside,
-    preserveFocus: true,
-    preview: false
-  });
+  if (!preview || !fs.existsSync(pdfPath)) return;
+  if (await preview.reload(pdfPath)) return;
+  // No panel yet: open one beside the editor. This keeps the existing behaviour
+  // where the first successful compile pops the preview open, without stealing
+  // focus from the editor the user is typing in.
+  await preview.show(pdfPath, { beside: true, preserveFocus: true });
 }
 
-async function openPdfPreview(uri?: vscode.Uri): Promise<void> {
+async function openPdfPreview(uri: vscode.Uri | undefined, output: vscode.OutputChannel): Promise<void> {
+  if (!preview) return;
   const source = uri ?? vscode.window.activeTextEditor?.document.uri;
   if (!source) return;
   const project = projectRootFor(source.fsPath) ?? root();
   if (!project) { vscode.window.showWarningMessage('olcli: open a project file first.'); return; }
-  const sourceName = path.basename(source.fsPath, path.extname(source.fsPath));
-  const configuredPath = vscode.workspace.getConfiguration('olcli').get<string>('pdfOutput', './.build/{文件名}.pdf')
-    .split('{文件名}').join(sourceName)
-    .split('{filename}').join(sourceName);
-  const pdf = vscode.Uri.file(path.resolve(project, configuredPath));
-  try { await vscode.workspace.fs.stat(pdf); } catch { vscode.window.showWarningMessage(`PDF not found: ${pdf.fsPath}`); return; }
-  await vscode.commands.executeCommand('vscode.open', pdf, {
-    viewColumn: vscode.ViewColumn.Beside,
-    preserveFocus: false,
-    preview: false
-  });
+  const template = vscode.workspace.getConfiguration('olcli').get<string>('pdfOutput', './.build/{文件名}.pdf');
+  const expected = pdfPathFor(project, template, sourceNameFor(source.fsPath));
+  let pdf = expected;
+  if (!fs.existsSync(pdf)) {
+    // The configured name may not exist yet (a save names the output after that
+    // file), so fall back to whatever the last compile actually wrote.
+    const fallback = newestPdfIn(path.dirname(expected));
+    if (!fallback) { vscode.window.showWarningMessage(`PDF not found: ${expected}. Save the TeX file once to trigger the cloud compile.`); return; }
+    output.appendLine(`preview: ${expected} not found, opening the newest PDF in ${path.dirname(expected)}: ${fallback}`);
+    pdf = fallback;
+  }
+  await preview.show(pdf, { beside: true, preserveFocus: false });
 }
 
 async function compileOnly(output: vscode.OutputChannel): Promise<void> {
@@ -393,9 +613,10 @@ async function compileOnly(output: vscode.OutputChannel): Promise<void> {
     vscode.window.showErrorMessage(`olcli failed: ${error instanceof Error ? error.message : String(error)}`);
   } finally {
     running = false;
+    armPeriodicSync(output);
     const next = pending;
     pending = undefined;
-    if (next) void syncAndMaybeCompile(next.compile, output, next.projectDirectory, next.savedFile, next.server);
+    if (next) void syncAndMaybeCompile(next.compile, output, next.projectDirectory, next.savedFile, next.server, next.background);
   }
 }
 
@@ -460,4 +681,7 @@ function rateLimitHint(detail: string): string {
   return /\b429\b/.test(detail) ? `${detail} (the Overleaf server is rate limiting this client; wait for the limit to reset before retrying)` : detail;
 }
 
-export function deactivate(): void { if (timer) clearTimeout(timer); }
+export function deactivate(): void {
+  if (timer) clearTimeout(timer);
+  if (periodicTimer) clearTimeout(periodicTimer);
+}

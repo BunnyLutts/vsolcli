@@ -50,6 +50,14 @@
         "command": "olcli.syncAndCompileCurrent",
         "title": "olcli: Sync and Compile",
         "icon": "$(sync)"
+      },
+      {
+        "command": "olcli.resolveConflictsLocal",
+        "title": "olcli: Resolve Conflicts (Keep Local)"
+      },
+      {
+        "command": "olcli.resolveConflictsRemote",
+        "title": "olcli: Resolve Conflicts (Keep Remote)"
       }
     ],
     "views": {
@@ -113,6 +121,12 @@
           "default": true,
           "description": "Compile after an automatic save sync succeeds."
         },
+        "olcli.autoSyncInterval": {
+          "type": "number",
+          "default": 0,
+          "minimum": 0,
+          "description": "Seconds between background syncs that run without a save. 0 disables them. Background syncs never compile, and are skipped while an editor in the project has unsaved changes."
+        },
         "olcli.disableLatexWorkshopOnSave": {
           "type": "boolean",
           "default": true,
@@ -121,12 +135,12 @@
         "olcli.pdfOutput": {
           "type": "string",
           "default": "./.build/{文件名}.pdf",
-          "description": "PDF path relative to the project root. {文件名} is replaced by the saved TeX file name."
+          "description": "PDF path relative to the project root. {文件名} is replaced by the saved TeX file name. The preview uses this path first, then falls back to the newest PDF in that directory."
         },
         "olcli.autoRefreshPreview": {
           "type": "boolean",
           "default": true,
-          "description": "Refresh the split PDF preview after cloud compilation downloads a new PDF."
+          "description": "Reload the split PDF preview after cloud compilation downloads a new PDF."
         },
         "olcli.syncOnConfigurationChange": {
           "type": "boolean",
@@ -169,6 +183,12 @@
           "default": 120000,
           "minimum": 1000,
           "description": "Cloud compile HTTP timeout in milliseconds. The underlying olcli default is 10000, which a full LaTeX compile routinely exceeds."
+        },
+        "olcli.syncTimeout": {
+          "type": "number",
+          "default": 60000,
+          "minimum": 1000,
+          "description": "HTTP timeout in milliseconds for the conflict-aware sync (whole-project download and per-file uploads)."
         }
       }
     }
@@ -185,6 +205,7 @@
     "typescript": "^5.3.0"
   },
   "dependencies": {
-    "@aloth/olcli": "0.13.0"
+    "@aloth/olcli": "0.13.0",
+    "pdfjs-dist": "3.11.174"
   }
 }
