@@ -34,12 +34,14 @@ test('project tree fetches once and does not refetch on refresh events', async (
     EventEmitter: RealEventEmitter,
     Uri: { file: fsPath => ({ fsPath }) },
     workspace: {
+      registerTextDocumentContentProvider: () => disposable,
       workspaceFolders: [{ uri: { fsPath: process.cwd() } }],
       getConfiguration: () => ({ get: (key, fallback) => settings[key] ?? fallback, update: async () => {} }),
       onDidSaveTextDocument: () => disposable,
       onDidChangeConfiguration: () => disposable
     },
     window: {
+      onDidChangeActiveTextEditor: () => disposable,
       createOutputChannel: () => ({ ...disposable, append() {}, appendLine() {} }),
       registerTreeDataProvider: (id, value) => { provider = value; return disposable; },
       showInputBox: async () => undefined,
@@ -91,6 +93,8 @@ test('project tree fetches once and does not refetch on refresh events', async (
 
   const servers = await provider.getChildren();
   const projects = await provider.getChildren(servers[0]);
+  assert.match(provider.getTreeItem(servers[0]).iconPath.light.fsPath, /[\\/]light[\\/]server\.svg$/);
+  assert.match(provider.getTreeItem(projects[0]).iconPath.dark.fsPath, /[\\/]dark[\\/]project\.svg$/);
   assert.deepEqual(projects.map(({ id, name }) => ({ id, name })), [{ id: 'abc123', name: 'My Paper' }]);
   await tick();
 

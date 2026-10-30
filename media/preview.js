@@ -160,22 +160,22 @@
     var spacer = document.createElement('span');
     spacer.className = 'preview-spacer';
 
-    prevButton = makeButton('上一页', '跳到上一页', function () {
+    prevButton = makeButton('上一页', 'page-previous', '跳到上一页', function () {
       goToPage(state.currentPage - 1);
     });
-    nextButton = makeButton('下一页', '跳到下一页', function () {
+    nextButton = makeButton('下一页', 'page-next', '跳到下一页', function () {
       goToPage(state.currentPage + 1);
     });
-    var zoomOutButton = makeButton('缩小', '缩小', function () {
+    var zoomOutButton = makeButton('缩小', 'zoom-out', '缩小', function () {
       zoomBy(1 / ZOOM_FACTOR);
     });
-    var zoomInButton = makeButton('放大', '放大', function () {
+    var zoomInButton = makeButton('放大', 'zoom-in', '放大', function () {
       zoomBy(ZOOM_FACTOR);
     });
-    var fitButton = makeButton('适宽', '按窗口宽度适应', function () {
+    var fitButton = makeButton('适宽', 'fit-width', '按窗口宽度适应', function () {
       applyFitWidth();
     });
-    var reloadButton = makeButton('重新加载', '重新读取并渲染当前 PDF', function () {
+    var reloadButton = makeButton('重新加载', 'refresh', '重新读取并渲染当前 PDF', function () {
       post({ type: 'reload-request' });
     });
 
@@ -194,11 +194,18 @@
     toolbarEl.appendChild(reloadButton);
   }
 
-  function makeButton(label, title, handler) {
+  function makeButton(label, icon, title, handler) {
     var button = document.createElement('button');
     button.type = 'button';
     button.className = 'preview-button';
-    button.textContent = label;
+    button.setAttribute('aria-label', title || label);
+    var glyph = document.createElement('span');
+    glyph.className = 'preview-icon preview-icon-' + icon;
+    glyph.setAttribute('aria-hidden', 'true');
+    button.appendChild(glyph);
+    var caption = document.createElement('span');
+    caption.textContent = label;
+    button.appendChild(caption);
     if (title) button.title = title;
     button.addEventListener('click', function (event) {
       event.preventDefault();

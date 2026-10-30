@@ -92,10 +92,12 @@ test('the panel html pins a nonce CSP and loads pdf.js, its worker and the previ
     const panel = h.created[0];
     assert.equal(panel.viewType, 'olcli.pdfPreview');
     assert.equal(panel.title, 'PDF: main.pdf');
+    assert.equal(panel.iconPath.light.path, '/ext/resources/icons/light/preview.svg');
+    assert.equal(panel.iconPath.dark.path, '/ext/resources/icons/dark/preview.svg');
     assert.equal(panel.column, 2, 'the preview opens beside the editor');
     assert.equal(panel.options.enableScripts, true);
     assert.equal(panel.options.retainContextWhenHidden, true);
-    assert.deepEqual(panel.options.localResourceRoots.map(uri => uri.path), ['/ext/media', '/ext/node_modules/pdfjs-dist']);
+    assert.deepEqual(panel.options.localResourceRoots.map(uri => uri.path), ['/ext/media', '/ext/resources/icons', '/ext/node_modules/pdfjs-dist']);
 
     const html = panel.webview.html;
     assert.match(html, /<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src https:\/\/webview\.local\/csp data: blob:; style-src https:\/\/webview\.local\/csp; script-src 'nonce-[^']+' https:\/\/webview\.local\/csp; font-src https:\/\/webview\.local\/csp; connect-src https:\/\/webview\.local\/csp;">/);

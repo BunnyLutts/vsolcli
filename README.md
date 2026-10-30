@@ -150,7 +150,8 @@ npm run compile
 ### 冲突产物与解决
 
 - 冲突时 `.olcli-conflicts/<时间戳>/conflicts.json` 记录每个冲突的路径、类型和 `.remote` 副本文件名；远端版本保存为 `<文件名>.<hash>.remote`。
-- 警告通知会给出冲突数量，可选择 **Show Conflicts** 定位目录；同一组冲突只提示一次。
+- 警告通知会给出冲突数量，可选择 **Show Difference** 在 VS Code 中比较云端副本（左）与本地文件（右）；多个冲突可先选择文件。**Show Conflicts** 在 VS Code 资源管理器中定位本次冲突目录；同一组冲突只提示一次。
+- 差异窗口右上角提供 **Sync Project**（同步）、**Resolve Conflicts (Keep Local)**（保留本地并同步）和 **Resolve Conflicts (Keep Remote)**（保留云端并同步）按钮。保留操作作用于当前差异窗口所属项目的全部冲突；保留本地前会先保存该项目的未保存编辑，保留云端时须先保存或撤销未保存编辑。同步成功且没有剩余冲突后，自动关闭该项目由 olcli 打开的差异页；失败或仍有冲突时保持打开，其他编辑器不受影响。
 - 解决方式：
   1. 手动把本地文件改成最终内容（或复制 `.remote` 副本覆盖本地），下次保存/同步会自动收敛；
   2. 命令面板执行 `olcli: Resolve Conflicts (Keep Local)` / `(Keep Remote)`，一次性按本地或远端解决全部冲突。

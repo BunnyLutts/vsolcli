@@ -13,6 +13,8 @@ let timer: NodeJS.Timeout | undefined;
 let periodicTimer: NodeJS.Timeout | undefined;
 let periodicFailures = 0;
 let lastConflictSignature = '';
+const conflictDiffs: Array<{ cwd: string; original: vscode.Uri; modified: vscode.Uri }> = [];
+const approvalSaves = new Set<string>();
 let running = false;
 let pending: SyncRequest | undefined;
 let secrets: vscode.SecretStorage;
@@ -27,7 +29,11 @@ export function activate(context: vscode.ExtensionContext): void {
   void disableLocalLatexBuild().catch(error => vscode.window.showErrorMessage(`Unable to disable LaTeX Workshop auto build: ${message(error)}`));
   const output = vscode.window.createOutputChannel('olcli');
   context.subscriptions.push(output);
-  const projects = new ProjectsProvider(output);
+  context.subscriptions.push(vscode.workspace.registerTextDocumentContentProvider('olcli-empty', {
+    provideTextDocumentContent: () => ''
+  }));
+  context.subscriptions.push(vscode.window.onDidChangeActiveTextEditor(() => { void updateConflictContext(); }));
+  const projects = new ProjectsProvider(output, context.extensionPath ?? path.resolve(__dirname, '..'));
   context.subscriptions.push(vscode.window.registerTreeDataProvider('olcli.projects', projects));
   preview = new PdfPreview(context, output);
   context.subscriptions.push(preview);
@@ -47,7 +53,13 @@ export function activate(context: vscode.ExtensionContext): void {
   };
 
   context.subscriptions.push(
-    vscode.commands.registerCommand('olcli.sync', () => run(false)),
+    vscode.commands.registerCommand('olcli.sync', async (uri?: vscode.Uri) => {
+      if (!enabled()) return;
+      const cwd = conflictProject(uri) ?? root();
+      if (!cwd) { vscode.window.showWarningMessage('olcli: open a workspace or set olcli.projectRoot.'); return; }
+      if (running) { vscode.window.showWarningMessage('olcli: a sync is already running.'); return; }
+      if (await syncAndMaybeCompile(false, output, cwd, undefined, serverForProject(cwd))) await closeConflictDiffs(cwd);
+    }),
     vscode.commands.registerCommand('olcli.compile', () => void compileOnly(output)),
     vscode.commands.registerCommand('olcli.syncAndCompile', () => run(true)),
     vscode.commands.registerCommand('olcli.syncAndCompileCurrent', () => {
@@ -60,9 +72,10 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand('olcli.listProjects', () => projects.refresh()),
     vscode.commands.registerCommand('olcli.pullProject', (project?: Project) => pullProject(project, output, projects)),
     vscode.commands.registerCommand('olcli.openPdfPreview', (uri?: vscode.Uri) => openPdfPreview(uri, output)),
-    vscode.commands.registerCommand('olcli.resolveConflictsLocal', () => void resolveConflicts('local', output)),
-    vscode.commands.registerCommand('olcli.resolveConflictsRemote', () => void resolveConflicts('remote', output)),
+    vscode.commands.registerCommand('olcli.resolveConflictsLocal', (uri?: vscode.Uri) => resolveConflicts('local', output, conflictProject(uri))),
+    vscode.commands.registerCommand('olcli.resolveConflictsRemote', (uri?: vscode.Uri) => resolveConflicts('remote', output, conflictProject(uri))),
     vscode.workspace.onDidSaveTextDocument(document => {
+      if (approvalSaves.has(document.uri.fsPath)) return;
       // Deliberately not gated on `running`: a save during a long sync or cloud
       // compile is coalesced into `pending` instead of being discarded. There is
       // no time-based suppression window: swallowing saves to avoid a re-run is
@@ -105,7 +118,7 @@ interface ServerNode { server: Server; }
 // replaces this instead of being dropped, and is served when that run finishes.
 interface SyncRequest { compile: boolean; projectDirectory?: string; savedFile?: string; server?: Server; background?: boolean; }
 
-interface SyncConflict { path: string; kind: string; }
+interface SyncConflict { path: string; kind: string; remoteCopy?: string; }
 // Summary printed by sync-guard.mjs. Counts are present on every completed run;
 // `skipped` is set when a concurrent run holds the project lock.
 interface SafeSyncSummary {
@@ -131,14 +144,23 @@ class ProjectsProvider implements vscode.TreeDataProvider<Project | ServerNode> 
   private items: Array<Project | ServerNode> = [];
   private loaded = false;
   private inflight: Promise<Array<Project | ServerNode>> | undefined;
-  constructor(private readonly output: vscode.OutputChannel) {}
+  constructor(private readonly output: vscode.OutputChannel, private readonly extensionPath: string) {}
+  private icon(name: string): { light: vscode.Uri; dark: vscode.Uri } {
+    return {
+      light: vscode.Uri.file(path.join(this.extensionPath, 'resources', 'icons', 'light', name + '.svg')),
+      dark: vscode.Uri.file(path.join(this.extensionPath, 'resources', 'icons', 'dark', name + '.svg'))
+    };
+  }
   getTreeItem(node: Project | ServerNode): vscode.TreeItem {
     if ('server' in node && !('id' in node)) {
-      return new vscode.TreeItem(node.server.name, vscode.TreeItemCollapsibleState.Collapsed);
+      const item = new vscode.TreeItem(node.server.name, vscode.TreeItemCollapsibleState.Collapsed);
+      item.iconPath = this.icon('server');
+      return item;
     }
     const project = node as Project;
     const item = new vscode.TreeItem(project.name, vscode.TreeItemCollapsibleState.None);
     item.description = project.id;
+    item.iconPath = this.icon('project');
     item.command = { command: 'olcli.pullProject', title: 'Pull Project', arguments: [project] };
     return item;
   }
@@ -289,7 +311,7 @@ async function syncAndMaybeCompile(compile: boolean, output: vscode.OutputChanne
       return false;
     }
     if (outcome.conflicts.length > 0) {
-      reportConflicts(outcome.conflicts, cwd, output);
+      reportConflicts(outcome.conflicts, cwd, output, outcome.conflictsDir);
       output.appendLine(`cloud compile skipped: ${outcome.conflicts.length} unresolved sync conflict(s)`);
       return false;
     }
@@ -314,7 +336,7 @@ async function syncAndMaybeCompile(compile: boolean, output: vscode.OutputChanne
 }
 
 /** Result of a sync attempt: unresolved conflicts, or a skipped concurrent run. */
-interface SyncOutcome { conflicts: SyncConflict[]; skipped: boolean; }
+interface SyncOutcome { conflicts: SyncConflict[]; skipped: boolean; conflictsDir?: string | null; }
 
 /**
  * Sync one project directory and return unresolved conflicts (empty on success).
@@ -342,7 +364,7 @@ async function syncProject(cwd: string, output: vscode.OutputChannel, server?: S
     for (const failure of summary.errors) output.appendLine(`sync error: ${failure.path}: ${failure.message}`);
     throw new Error(`${summary.errors.length} file operation(s) failed; see the olcli output`);
   }
-  return { conflicts: (summary.conflicts ?? []).map(conflict => ({ path: conflict.path, kind: conflict.kind })), skipped: false };
+  return { conflicts: summary.conflicts ?? [], conflictsDir: summary.conflictsDir, skipped: false };
 }
 
 /**
@@ -379,15 +401,45 @@ function dirtyProjectDocuments(cwd: string): string[] {
 }
 
 /** Report conflicts once per distinct set, and offer the copies folder. */
-function reportConflicts(conflicts: SyncConflict[], cwd: string, output: vscode.OutputChannel): void {
+function reportConflicts(conflicts: SyncConflict[], cwd: string, output: vscode.OutputChannel, conflictsDir?: string | null): void {
   for (const conflict of conflicts) output.appendLine(`conflict: ${conflict.path} (${describeConflict(conflict.kind)})`);
-  const signature = conflicts.map(conflict => `${conflict.path}:${conflict.kind}`).sort().join('|');
+  const signature = `${cwd}|${conflicts.map(conflict => `${conflict.path}:${conflict.kind}`).sort().join('|')}`;
   if (signature === lastConflictSignature) return;
   lastConflictSignature = signature;
   const label = conflicts.length === 1 ? conflicts[0].path : `${conflicts.length} files`;
-  void vscode.window.showWarningMessage(`olcli: ${label} changed both locally and in Overleaf, so both versions were kept. Remote copies are in .olcli-conflicts/.`, 'Show Conflicts').then(choice => {
-    if (choice === 'Show Conflicts') void vscode.commands.executeCommand('revealFileInOS', vscode.Uri.file(path.join(cwd, '.olcli-conflicts')));
-  });
+  void Promise.resolve(vscode.window.showWarningMessage(`olcli: ${label} changed both locally and in Overleaf, so both versions were kept. Remote copies are in .olcli-conflicts/.`, 'Show Difference', 'Show Conflicts')).then(async choice => {
+    if (choice === 'Show Difference') await showConflictDifference(conflicts, cwd, conflictsDir);
+    if (choice === 'Show Conflicts') await vscode.commands.executeCommand('revealInExplorer', vscode.Uri.file(path.resolve(cwd, conflictsDir ?? '.olcli-conflicts')));
+  }).catch(error => vscode.window.showErrorMessage(`olcli: unable to show conflicts: ${message(error)}`));
+}
+
+async function showConflictDifference(conflicts: SyncConflict[], cwd: string, conflictsDir?: string | null): Promise<void> {
+  const selected = conflicts.length === 1 ? { conflict: conflicts[0] } : await vscode.window.showQuickPick(
+    conflicts.map(conflict => ({ label: conflict.path, description: describeConflict(conflict.kind), conflict })),
+    { placeHolder: 'Select a file to compare with Overleaf' }
+  );
+  if (!selected) return;
+  const conflict = selected.conflict;
+  const localPath = path.resolve(cwd, conflict.path);
+  if (!isWithin(localPath, cwd)) throw new Error('Conflict path escapes the project directory');
+  const empty = (side: string) => vscode.Uri.from({ scheme: 'olcli-empty', path: `/${side}/${conflict.path}` });
+  let remote = empty('Overleaf-deleted');
+  if (conflict.remoteCopy && conflictsDir) {
+    const directory = path.resolve(cwd, conflictsDir);
+    const copy = path.resolve(directory, conflict.remoteCopy);
+    if (!isWithin(directory, cwd) || !isWithin(copy, directory)) throw new Error('Conflict copy escapes the project directory');
+    await fs.promises.access(copy);
+    remote = vscode.Uri.file(copy);
+  } else if (conflict.kind !== 'remote-deleted-local-modified') {
+    throw new Error('No Overleaf snapshot is available for this conflict; sync again to refresh the conflict copies');
+  }
+  const localDocument = vscode.workspace.textDocuments.find(document => document.uri.scheme === 'file' && document.uri.fsPath === localPath);
+  const local = localDocument?.uri ?? (fs.existsSync(localPath) ? vscode.Uri.file(localPath) : empty('Local-deleted'));
+  await vscode.commands.executeCommand('vscode.diff', remote, local, `${conflict.path} (Overleaf ↔ Local)`, { preview: false });
+  if (!conflictDiffs.some(diff => sameUri(diff.original, remote) && sameUri(diff.modified, local))) {
+    conflictDiffs.push({ cwd, original: remote, modified: local });
+  }
+  await updateConflictContext();
 }
 
 function describeConflict(kind: string): string {
@@ -402,21 +454,64 @@ function describeConflict(kind: string): string {
   }
 }
 
+function sameUri(a: vscode.Uri, b: vscode.Uri): boolean {
+  return a.toString() === b.toString();
+}
+
+/** Route toolbar actions to the project belonging to this conflict tab. */
+function conflictProject(uri?: vscode.Uri): string | undefined {
+  const input = vscode.window.tabGroups.activeTabGroup.activeTab?.input;
+  const active = input instanceof vscode.TabInputTextDiff
+    ? conflictDiffs.find(diff => sameUri(diff.original, input.original) && sameUri(diff.modified, input.modified))
+    : undefined;
+  return active?.cwd ?? (uri && conflictDiffs.find(diff => sameUri(diff.modified, uri) || sameUri(diff.original, uri))?.cwd);
+}
+
+async function updateConflictContext(): Promise<void> {
+  await vscode.commands.executeCommand('setContext', 'olcli.conflictDiffActive', Boolean(conflictProject()));
+}
+
+/** Close only olcli conflict comparisons, leaving other editors and projects open. */
+async function closeConflictDiffs(cwd: string): Promise<void> {
+  const tracked = conflictDiffs.filter(diff => diff.cwd === cwd);
+  const tabs = vscode.window.tabGroups.all.flatMap(group => group.tabs).filter(tab => {
+    const input = tab.input;
+    return input instanceof vscode.TabInputTextDiff && tracked.some(diff => sameUri(diff.original, input.original) && sameUri(diff.modified, input.modified));
+  });
+  if (tabs.length && !await vscode.window.tabGroups.close(tabs)) return;
+  for (let index = conflictDiffs.length - 1; index >= 0; index--) {
+    if (conflictDiffs[index].cwd === cwd) conflictDiffs.splice(index, 1);
+  }
+  await updateConflictContext();
+}
+
 /** Explicitly resolve every conflict in the project one way (manual command). */
-async function resolveConflicts(prefer: ConflictPreference, output: vscode.OutputChannel): Promise<void> {
+async function resolveConflicts(prefer: ConflictPreference, output: vscode.OutputChannel, projectDirectory?: string): Promise<void> {
   if (!enabled()) return;
-  const cwd = root();
+  const cwd = projectDirectory ?? root();
   if (!cwd) { vscode.window.showWarningMessage('olcli: open a workspace or set olcli.projectRoot.'); return; }
   if (running) { vscode.window.showWarningMessage('olcli: a sync is already running.'); return; }
   running = true;
   try {
+    const dirty = vscode.workspace.textDocuments.filter(document => document.isDirty && document.uri.scheme === 'file' && isWithin(document.uri.fsPath, cwd));
+    if (prefer === 'remote' && dirty.length) {
+      vscode.window.showWarningMessage('olcli: save or revert unsaved project files before keeping the Overleaf versions.');
+      return;
+    }
+    for (const document of dirty) {
+      approvalSaves.add(document.uri.fsPath);
+      try {
+        if (!await document.save()) throw new Error('Unable to save ' + document.uri.fsPath);
+      } finally { approvalSaves.delete(document.uri.fsPath); }
+    }
     const outcome = await syncProject(cwd, output, serverForProject(cwd), prefer);
     if (outcome.skipped) {
       vscode.window.showWarningMessage('olcli: another sync is already running for this project; try again when it finishes.');
     } else if (outcome.conflicts.length > 0) {
-      reportConflicts(outcome.conflicts, cwd, output);
+      reportConflicts(outcome.conflicts, cwd, output, outcome.conflictsDir);
     } else {
       lastConflictSignature = '';
+      await closeConflictDiffs(cwd);
       vscode.window.showInformationMessage(`olcli: conflicts resolved, kept the ${prefer === 'local' ? 'local files' : 'Overleaf versions'}.`);
     }
   } catch (error) {

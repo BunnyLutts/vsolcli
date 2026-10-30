@@ -68,6 +68,9 @@ body {
 }
 
 .preview-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   flex: 0 0 auto;
   padding: 2px 8px;
   border: 1px solid transparent;
@@ -178,3 +181,20 @@ body {
 body.vscode-high-contrast .preview-page {
   box-shadow: 0 0 0 1px var(--vscode-contrastBorder, var(--vscode-panel-border));
 }
+
+/* SVG masks inherit the button color, including high-contrast themes. */
+.preview-icon {
+  display: inline-block;
+  flex: 0 0 16px;
+  width: 16px;
+  height: 16px;
+  background-color: currentColor;
+  -webkit-mask: var(--preview-icon) center / contain no-repeat;
+  mask: var(--preview-icon) center / contain no-repeat;
+}
+.preview-icon-page-previous { --preview-icon: url('../resources/icons/light/page-previous.svg'); }
+.preview-icon-page-next { --preview-icon: url('../resources/icons/light/page-next.svg'); }
+.preview-icon-zoom-out { --preview-icon: url('../resources/icons/light/zoom-out.svg'); }
+.preview-icon-zoom-in { --preview-icon: url('../resources/icons/light/zoom-in.svg'); }
+.preview-icon-fit-width { --preview-icon: url('../resources/icons/light/fit-width.svg'); }
+.preview-icon-refresh { --preview-icon: url('../resources/icons/light/refresh.svg'); }

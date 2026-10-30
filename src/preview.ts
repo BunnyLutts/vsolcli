@@ -38,9 +38,14 @@ export class PdfPreview implements vscode.Disposable {
           retainContextWhenHidden: true,
           localResourceRoots: [
             vscode.Uri.joinPath(this.context.extensionUri, 'media'),
+            vscode.Uri.joinPath(this.context.extensionUri, 'resources', 'icons'),
             vscode.Uri.joinPath(this.context.extensionUri, 'node_modules', 'pdfjs-dist')
           ]
         });
+      created.iconPath = {
+        light: vscode.Uri.joinPath(this.context.extensionUri, 'resources', 'icons', 'light', 'preview.svg'),
+        dark: vscode.Uri.joinPath(this.context.extensionUri, 'resources', 'icons', 'dark', 'preview.svg')
+      };
       this.panel = created;
       this.panelPath = file;
       created.webview.html = this.html(created.webview, path.basename(file));

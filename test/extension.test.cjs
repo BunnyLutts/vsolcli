@@ -26,6 +26,7 @@ test('self-hosted login, project tree, pull and authentication failures', async 
     EventEmitter: class { event = () => disposable; fire() {} },
     Uri: { file: fsPath => ({ fsPath }) },
     workspace: {
+      registerTextDocumentContentProvider: () => disposable,
       workspaceFolders: [{ uri: { fsPath: process.cwd() } }],
       getConfiguration: section => {
         const values = section === 'latex-workshop' ? latexSettings : settings;
@@ -35,6 +36,7 @@ test('self-hosted login, project tree, pull and authentication failures', async 
       onDidChangeConfiguration: () => disposable
     },
     window: {
+      onDidChangeActiveTextEditor: () => disposable,
       createOutputChannel: () => ({ ...disposable, append: text => { output += text; }, appendLine: text => { output += text; } }),
       registerTreeDataProvider: (id, value) => { provider = value; return disposable; },
       showInputBox: async () => inputs.shift(),

@@ -1,6 +1,7 @@
 {
   "name": "vsolcli",
   "displayName": "VS Code olcli Sync",
+  "icon": "resources/icon.png",
   "description": "Automatically sync and compile Overleaf projects with olcli.",
   "version": "0.1.0",
   "license": "MIT",
@@ -19,45 +20,83 @@
     "commands": [
       {
         "command": "olcli.sync",
-        "title": "olcli: Sync Project"
+        "title": "olcli: Sync Project",
+        "icon": {
+          "light": "resources/icons/light/sync.svg",
+          "dark": "resources/icons/dark/sync.svg"
+        }
       },
       {
         "command": "olcli.compile",
-        "title": "olcli: Compile Project"
+        "title": "olcli: Compile Project",
+        "icon": {
+          "light": "resources/icons/light/compile.svg",
+          "dark": "resources/icons/dark/compile.svg"
+        }
       },
       {
         "command": "olcli.syncAndCompile",
-        "title": "olcli: Sync and Compile Project"
+        "title": "olcli: Sync and Compile Project",
+        "icon": {
+          "light": "resources/icons/light/sync-compile.svg",
+          "dark": "resources/icons/dark/sync-compile.svg"
+        }
       },
       {
         "command": "olcli.login",
-        "title": "olcli: Login to Self-hosted Overleaf"
+        "title": "olcli: Login to Self-hosted Overleaf",
+        "icon": {
+          "light": "resources/icons/light/login.svg",
+          "dark": "resources/icons/dark/login.svg"
+        }
       },
       {
         "command": "olcli.listProjects",
-        "title": "olcli: List Projects"
+        "title": "olcli: List Projects",
+        "icon": {
+          "light": "resources/icons/light/refresh.svg",
+          "dark": "resources/icons/dark/refresh.svg"
+        }
       },
       {
         "command": "olcli.pullProject",
-        "title": "olcli: Pull Project"
+        "title": "olcli: Pull Project",
+        "icon": {
+          "light": "resources/icons/light/pull.svg",
+          "dark": "resources/icons/dark/pull.svg"
+        }
       },
       {
         "command": "olcli.openPdfPreview",
         "title": "olcli: Open PDF Preview",
-        "icon": "$(split-horizontal)"
+        "icon": {
+          "light": "resources/icons/light/preview.svg",
+          "dark": "resources/icons/dark/preview.svg"
+        }
       },
       {
         "command": "olcli.syncAndCompileCurrent",
         "title": "olcli: Sync and Compile",
-        "icon": "$(sync)"
+        "icon": {
+          "light": "resources/icons/light/sync-compile.svg",
+          "dark": "resources/icons/dark/sync-compile.svg"
+        }
       },
       {
         "command": "olcli.resolveConflictsLocal",
-        "title": "olcli: Resolve Conflicts (Keep Local)"
+        "title": "olcli: Resolve Conflicts (Keep Local)",
+        "icon": {
+          "light": "resources/icons/light/keep-local.svg",
+          "dark": "resources/icons/dark/keep-local.svg"
+        }
       },
       {
         "command": "olcli.resolveConflictsRemote",
-        "title": "olcli: Resolve Conflicts (Keep Remote)"
+        "title": "olcli: Resolve Conflicts (Keep Remote)",
+        "icon": {
+          "light": "resources/icons/light/keep-remote.svg",
+          "dark": "resources/icons/dark/keep-remote.svg"
+        }
       }
     ],
     "views": {
@@ -73,7 +112,7 @@
         {
           "id": "olcli",
           "title": "olcli",
-          "icon": "resources/olcli.svg"
+          "icon": "resources/olcli-v2.svg"
         }
       ]
     },
@@ -81,13 +120,28 @@
       "editor/title": [
         {
           "command": "olcli.syncAndCompileCurrent",
-          "when": "editorLangId == latex || resourceExtname == .tex",
-          "group": "navigation@ olcli"
+          "when": "(editorLangId == latex || resourceExtname == .tex) && !olcli.conflictDiffActive",
+          "group": "navigation@10"
         },
         {
           "command": "olcli.openPdfPreview",
-          "when": "editorLangId == latex || resourceExtname == .tex",
-          "group": "navigation@ olcli"
+          "when": "(editorLangId == latex || resourceExtname == .tex) && !olcli.conflictDiffActive",
+          "group": "navigation@11"
+        },
+        {
+          "command": "olcli.sync",
+          "when": "isInDiffEditor && olcli.conflictDiffActive",
+          "group": "navigation@2"
+        },
+        {
+          "command": "olcli.resolveConflictsLocal",
+          "when": "isInDiffEditor && olcli.conflictDiffActive",
+          "group": "navigation@0"
+        },
+        {
+          "command": "olcli.resolveConflictsRemote",
+          "when": "isInDiffEditor && olcli.conflictDiffActive",
+          "group": "navigation@1"
         }
       ],
       "view/title": [

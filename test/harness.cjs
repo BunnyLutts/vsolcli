@@ -23,9 +23,13 @@ const DEFAULTS = {
   servers: [{ id: 's', name: 'overleaf.example', url: 'https://overleaf.example', cookieName: 'overleaf_session2' }]
 };
 
-function harness({ projectRoot, storedSession, settings: overrides } = {}) {
+function harness({ projectRoot, storedSession, settings: overrides, warningChoice, quickPickIndex, commandError } = {}) {
   const commands = new Map();
   const opened = [];
+  const tabs = [];
+  const closedTabs = [];
+  const group = { tabs, activeTab: undefined };
+  const makeUri = parts => ({ ...parts, toString() { return this.scheme + ':' + (this.fsPath ?? this.path); } });
   const errors = [];
   const warnings = [];
   const calls = [];
@@ -46,8 +50,10 @@ function harness({ projectRoot, storedSession, settings: overrides } = {}) {
     Diagnostic: class { constructor(range, message, severity) { this.range = range; this.message = message; this.severity = severity; } },
     DiagnosticSeverity: { Error: 0, Warning: 1 },
     Range: class {},
-    Uri: { file: fsPath => ({ fsPath, scheme: 'file' }) },
+    Uri: { file: fsPath => makeUri({ fsPath, scheme: 'file' }), from: makeUri },
+    TabInputTextDiff: class { constructor(original, modified) { this.original = original; this.modified = modified; } },
     workspace: {
+      registerTextDocumentContentProvider: () => disposable(),
       workspaceFolders: [{ uri: { fsPath: projectRoot } }],
       getConfiguration: () => ({ get: (key, fallback) => settings[key] ?? fallback, update: async () => {} }),
       fs: { stat: async () => ({}) },
@@ -56,20 +62,32 @@ function harness({ projectRoot, storedSession, settings: overrides } = {}) {
       onDidChangeConfiguration: handler => { onConfigurationChange = handler; return disposable(); }
     },
     window: {
+      onDidChangeActiveTextEditor: () => disposable(),
+      tabGroups: { all: [group], activeTabGroup: group, close: async targets => {
+        closedTabs.push(...targets);
+        for (const tab of targets) { const index = tabs.indexOf(tab); if (index >= 0) tabs.splice(index, 1); }
+        if (targets.includes(group.activeTab)) group.activeTab = tabs[0];
+        return true;
+      } },
       activeTextEditor: { document: { uri: { fsPath: path.join(projectRoot, 'main.tex') } } },
       createOutputChannel: () => ({ ...disposable(), append: text => { output += text; }, appendLine: text => { output += text + '\n'; }, show() {} }),
       registerTreeDataProvider: () => disposable(),
       showInputBox: async () => undefined,
-      showQuickPick: async () => undefined,
+      showQuickPick: async items => quickPickIndex === undefined ? undefined : items[quickPickIndex],
       showOpenDialog: async () => undefined,
       showErrorMessage: text => errors.push(text),
-      showWarningMessage: (text, ...items) => { warnings.push(text); return Promise.resolve(undefined); },
+      showWarningMessage: (text, ...items) => { warnings.push(text); return Promise.resolve(items.includes(warningChoice) ? warningChoice : undefined); },
       showInformationMessage() {},
       setStatusBarMessage() {}
     },
     commands: {
       registerCommand: (id, callback) => { commands.set(id, callback); return disposable(); },
-      executeCommand: async (...args) => { opened.push(args); }
+      executeCommand: async (...args) => { opened.push(args);
+        if (commandError && args[0] === 'vscode.diff') throw new Error(commandError);
+        if (args[0] === 'vscode.diff') {
+          const tab = { input: new vscode.TabInputTextDiff(args[1], args[2]) };
+          tabs.push(tab); group.activeTab = tab;
+        } }
     }
   };
 
@@ -139,6 +157,8 @@ function harness({ projectRoot, storedSession, settings: overrides } = {}) {
     commands,
     calls,
     opened,
+    tabs,
+    closedTabs,
     errors,
     warnings,
     settings,
@@ -157,7 +177,7 @@ function harness({ projectRoot, storedSession, settings: overrides } = {}) {
     },
     /** Register a dirty document (unsaved editor buffer) in the project. */
     document: (relative, dirty = true) => {
-      const document = { uri: { fsPath: path.join(projectRoot, relative), scheme: 'file' }, isDirty: dirty };
+      const document = { uri: makeUri({ fsPath: path.join(projectRoot, relative), scheme: 'file' }), isDirty: dirty, save: async () => { document.isDirty = false; onSave(document); return true; } };
       documents.push(document);
       return document;
     },
