@@ -5,7 +5,16 @@
   "description": "Automatically sync and compile Overleaf projects with olcli.",
   "version": "0.1.0",
   "license": "MIT",
-  "publisher": "vsolcli",
+  "publisher": "BunnyLutts",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/BunnyLutts/vsolcli.git"
+  },
+  "homepage": "https://github.com/BunnyLutts/vsolcli#readme",
+  "bugs": {
+    "url": "https://github.com/BunnyLutts/vsolcli/issues"
+  },
+  "keywords": ["overleaf", "latex", "sync", "pdf"],
   "engines": {
     "vscode": "^1.99.0"
   },

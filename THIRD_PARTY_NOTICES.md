@@ -2,9 +2,19 @@
 
 This document lists the third-party open-source software bundled in the `vsolcli` VS Code extension ("VS Code olcli Sync"). The packages below are the production (runtime) dependencies resolved from `package-lock.json` and shipped inside the `.vsix`.
 
-Total: 158 packages — MIT (132), BSD-2-Clause (11), ISC (10), BSD-3-Clause (4), (MIT OR CC0-1.0) (1).
+Total: 159 packages — MIT (132), BSD-2-Clause (11), ISC (10), BSD-3-Clause (4), Apache-2.0 (1), (MIT OR CC0-1.0) (1).
 
 This file is generated. Regenerate it after changing dependencies, and keep it in sync with the bundled `node_modules`.
+
+---
+
+## pdfjs-dist@3.11.174
+
+- License: Apache-2.0
+- Project: Mozilla PDF.js
+- Repository: https://github.com/mozilla/pdfjs-dist
+- Homepage: https://mozilla.github.io/pdf.js/
+- The complete upstream license is bundled at `node_modules/pdfjs-dist/LICENSE` inside the extension. The distributed PDF.js builds retain their upstream copyright and license notices.
 
 ---
 
