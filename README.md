@@ -1,40 +1,209 @@
 # VS Code olcli Sync
 
-在 VS Code 中使用内置的 [`olcli`](https://github.com/aloth/olcli) 自动同步并云端编译 Overleaf 项目：保存 `.tex` 文件后自动执行 `olcli sync`，成功后在云端编译并把生成的 PDF 下载到本地。修改 olcli 配置时也可触发同样的流程。
+English | [简体中文](README.zh-CN.md)
 
-> **提示**：插件已内置 olcli，无需全局安装 CLI 或 npm，通过插件登录命令完成认证即可使用。
-> 云端语法错误的提示目前可能不完整，详见 [已知问题](#已知问题)。
+Edit your Overleaf projects in VS Code, sync local changes, compile in the cloud, and preview the resulting PDF beside your source.
 
-## 功能特性
+Powered by the bundled [`olcli`](https://github.com/aloth/olcli) client, this extension connects to Overleaf instances, including self-hosted deployments. You do not need a separate global CLI, npm installation, local TeX distribution, or PDF viewer to use the packaged extension.
 
-- **保存即同步**：保存 `.tex` 文件后自动同步到 Overleaf，并可继续云端编译。
-- **冲突感知同步**：以内容基线做三方比较；两边都改时自动三方合并，冲突则保留双方版本并报告，不再静默覆盖。
-- **定时后台同步**：可配置间隔自动同步（只同步不编译），适合两地错开编辑。
-- **云端编译与下载**：编译结果按 `olcli.pdfOutput` 下载到本地，默认 `./.build/{文件名}.pdf`。
-- **内置 CLI**：随插件打包 `olcli`，无需单独安装。
-- **多服务器项目面板**：登录 self-hosted 实例后，在活动栏 `olcli` 视图中浏览并拉取远端项目。
-- **Problems 诊断**：云端编译的 TeX 错误和 LaTeX 警告显示在 Problems 面板，来源为 `olcli (cloud)`。
-- **PDF 拆分预览**：在编辑器内拆分预览编译产物，并在重新编译后自动刷新。预览由扩展自带的 webview + pdf.js 渲染，无需安装 LaTeX Workshop 或其他 PDF 查看器插件。
+> **Important:** Cloud error diagnostics are currently incomplete. A downloaded PDF or a successful compilation notification does not guarantee that your document has no LaTeX errors. Check the Overleaf web interface and compile log when in doubt.
 
-## 环境要求
+## Features
 
-- VS Code 1.99 或更新版本。
-- 一个可访问的 Overleaf 实例（含 self-hosted 部署）。
-- 无需另行安装 `olcli`，扩展已内置 `@aloth/olcli`。
+- **Sync on save:** Send saved project changes to Overleaf and optionally compile afterward.
+- **Conflict-aware synchronization:** Compare local files, remote files, and a saved baseline. Merge non-overlapping text edits when possible; preserve both versions when a conflict needs your attention.
+- **Background sync:** Optionally synchronize at a configurable interval without compiling. Background sync waits while project editors have unsaved changes.
+- **Cloud compilation:** Download the generated PDF to a configurable local path.
+- **Built-in PDF preview:** View PDFs beside your source with page navigation, zoom, fit-to-width, and refresh controls. An open preview refreshes after compilation while preserving the view.
+- **Multi-server project explorer:** Sign in to multiple instances, browse projects, and pull them into local folders.
+- **Conflict comparisons:** Compare the Overleaf snapshot with your local file in a VS Code diff editor, then keep the local or remote versions using project-specific toolbar actions.
+- **Problems integration:** Display supported cloud TeX errors and warnings under `olcli (cloud)`.
 
-## 安装
+## Requirements
 
-### 安装打包好的扩展
+- VS Code **1.99 or later**.
+- An accessible Overleaf instance and a valid account or session cookie.
+- Optional: Git available to the extension host for automatic three-way text merging. Without Git, conflicting versions are preserved for manual resolution.
 
-1. 获取已发布的 `.vsix`，或按下方步骤自行打包。
-2. 在 VS Code 中执行 `Extensions: Install from VSIX...`，选择该文件。
-3. 重新加载窗口。
+In Remote SSH or WSL environments, the extension and any configured external tools must be available in the environment where the extension runs.
 
-> 打包 VSIX 时必须保留运行依赖；VS Code 不会在安装扩展时执行 `npm install`。
+## Installation
 
-### 打包与发布
+Install a packaged VSIX using **Extensions: Install from VSIX...** in VS Code, then reload the window.
 
-Marketplace Publisher ID 为 `BunnyLutts`，扩展 ID 为 `BunnyLutts.vsolcli`。
+The Marketplace extension identifier is `BunnyLutts.vsolcli`. See [Packaging and publishing](#packaging-and-publishing) to build a VSIX from source.
+
+## Quick start
+
+1. Run **olcli: Login to Self-hosted Overleaf** from the Command Palette.
+2. Enter your instance URL and authenticate with email/password or a session cookie.
+3. Open the **olcli** view in the Activity Bar, expand your server, and select a project to pull into a local folder.
+4. Open a `.tex` file in the pulled project and save it. The extension synchronizes the project, compiles in the cloud by default, and downloads the PDF.
+5. Use **olcli: Open PDF Preview** or the editor title button to view the PDF beside your source.
+
+Command output is available in **View → Output → olcli**.
+
+Automatic saves, configuration changes, and periodic sync only run in directories with valid olcli project metadata. Ordinary workspaces and folders that have not been linked to a project are skipped without a “No project specified” popup. A manual sync, compile, or conflict-resolution command in an unconfigured directory instead shows a setup hint. Real authentication, network, and sync failures in configured projects are still reported.
+
+Setting `olcli.projectRoot` selects a local directory; it does not link that directory to a remote project. Pull the project first, or use an existing directory configured by olcli. For saved files, the nearest recognized project directory takes precedence over an enclosing project.
+
+## Authentication and project explorer
+
+### Sign in
+
+Run **olcli: Login to Self-hosted Overleaf**, enter a URL such as `https://overleaf.example.com`, and choose:
+
+- **Email and password:** Available when the instance supports password authentication. The extension detects the session cookie name returned by the server.
+- **Session cookie:** Useful for SSO instances. Paste a raw cookie value or a single named cookie such as `overleaf.sid=value`. Raw values use `olcli.cookieName`, which defaults to `overleaf_session2`.
+
+The extension validates the login using its bundled client and stores only the session cookie in **VS Code SecretStorage**, keyed by instance URL. It does not persist your email/password. Credentials are passed to child processes through environment variables rather than command-line arguments or settings, and are not intentionally written to logs. Extension login does not update olcli's global authentication configuration.
+
+### Browse and pull projects
+
+- Each configured server is a top-level node in the **olcli** view.
+- Use the view title buttons to sign in or refresh the list.
+- Select a project and choose a local destination with VS Code's folder picker.
+- After pulling, the extension opens the destination in the current window and writes a local project mapping containing the server URL, cookie name, and project ID.
+- Repeat login to add another server.
+
+## Commands
+
+| Command | Purpose |
+| --- | --- |
+| `olcli: Login to Self-hosted Overleaf` | Authenticate and save a session for an instance. |
+| `olcli: List Projects` | Refresh the remote project list. |
+| `olcli: Pull Project` | Download a project into a local directory and open it. |
+| `olcli: Sync Project` | Synchronize the local project with Overleaf. |
+| `olcli: Compile Project` | Compile remotely without syncing local edits first. |
+| `olcli: Sync and Compile Project` | Sync, compile remotely, and download the PDF. |
+| `olcli: Sync and Compile` | Editor title action for the current source file. |
+| `olcli: Open PDF Preview` | Open the built-in split PDF preview. |
+| `olcli: Resolve Conflicts (Keep Local)` | Resolve all project conflicts in favor of local files; requires a usable session. |
+| `olcli: Resolve Conflicts (Keep Remote)` | Resolve all project conflicts in favor of Overleaf; requires a usable session. |
+
+## Settings
+
+Search for **olcli** in VS Code Settings.
+
+| Setting | Default | Description |
+| --- | --- | --- |
+| `olcli.enabled` | `true` | Enable olcli operations. |
+| `olcli.autoSyncOnSave` | `true` | Synchronize when a project document is saved. |
+| `olcli.autoCompileOnSave` | `true` | Compile after a successful save-triggered sync. |
+| `olcli.autoSyncInterval` | `0` | Background sync interval in seconds; `0` disables it. Never compiles and skips projects with unsaved editors. |
+| `olcli.disableLatexWorkshopOnSave` | `true` | Disable LaTeX Workshop's automatic builds so olcli handles cloud compilation. |
+| `olcli.pdfOutput` | `./.build/{文件名}.pdf` | PDF output path relative to the project root. Both `{文件名}` and `{filename}` expand to the saved TeX filename without its extension. |
+| `olcli.autoRefreshPreview` | `true` | Refresh the PDF preview after downloading a compiled PDF. |
+| `olcli.syncOnConfigurationChange` | `true` | Sync and compile a configured project after relevant olcli settings change. Changing only the background interval does not trigger an immediate compile. |
+| `olcli.projectRoot` | `""` | Project directory; empty uses the first workspace folder for project-wide commands. Valid project metadata is still required. |
+| `olcli.executable` | `""` | Use the bundled CLI by default; optionally set an external command or absolute executable path. |
+| `olcli.baseUrl` | `""` | Instance URL, for example `https://overleaf.example.com`. |
+| `olcli.cookieName` | `overleaf_session2` | Session cookie name used by the instance. |
+| `olcli.servers` | `[]` | Configured servers; login adds entries automatically. |
+| `olcli.debounceMs` | `800` | Delay in milliseconds before a save/configuration-triggered operation starts. |
+| `olcli.compileTimeout` | `120000` | Cloud compile HTTP timeout in milliseconds. |
+| `olcli.syncTimeout` | `60000` | Conflict-aware sync HTTP timeout in milliseconds. |
+
+For example, to use the English filename placeholder and enable one-minute background sync:
+
+```json
+{
+  "olcli.pdfOutput": "./.build/{filename}.pdf",
+  "olcli.autoSyncInterval": 60
+}
+```
+
+## Cloud compilation and diagnostics
+
+Saving a TeX file selects that file as the cloud compile root. For example, saving `main.tex` downloads the result to `.build/main.pdf` with the default output template.
+
+When a usable session and project configuration are available, one cloud compile provides both the PDF and its log. The log is saved beside the PDF and parsed for Problems diagnostics. If the extension must fall back to the CLI, obtaining the log through `olcli output log` triggers an additional cloud compilation.
+
+On a reported compile failure, the extension shows the error and output channel, and opens the downloaded log when available. Network or authentication failures can also prevent log retrieval. Diagnostic locations may be inaccurate for complex nested documents.
+
+### LaTeX Workshop compatibility
+
+LaTeX Workshop can still provide editing and completion features. By default, this extension changes its workspace-level `latex-workshop.latex.autoBuild.run` setting from `onSave` or `onFileChange` to `never`, avoiding competing local builds during synchronization. Set `olcli.disableLatexWorkshopOnSave` to `false` to stop managing that setting; restore LaTeX Workshop's automatic build setting manually if desired.
+
+The built-in PDF preview does not depend on LaTeX Workshop.
+
+## Synchronization and conflicts
+
+With a usable session, server configuration, and project metadata, the extension uses its bundled conflict-aware sync helper. It records hashes in `.olcli-sync-state.json` and baseline file contents in `.olcli-base/`.
+
+| Change relative to the baseline | Action |
+| --- | --- |
+| Only local changed | Upload; propagate local deletion if the remote copy is unchanged. |
+| Only remote changed | Download; propagate remote deletion if the local copy is unchanged. |
+| Both sides now have identical contents | Accept the shared contents and update the baseline. |
+| Both edited the same text file without overlapping changes | Attempt a three-way merge using `git merge-file`, then upload the merged file. |
+| Overlapping edits or conflicting binary contents | Preserve both versions and report the conflict. |
+| One side deleted while the other edited | Report a conflict rather than silently deleting or restoring the file. |
+| A local editor has unsaved changes | Protect its buffer from incoming writes/deletions and report a conflict when necessary. |
+
+### Review and resolve conflicts
+
+Remote snapshots and a conflict manifest are written under `.olcli-conflicts/<timestamp>/`.
+
+- Choose **Show Difference** in the conflict notification to compare the Overleaf snapshot on the left with your local file on the right. For multiple conflicts, select a file first.
+- Choose **Show Conflicts** to reveal the snapshot directory in VS Code's Explorer.
+- Diff editor title actions provide **Sync Project**, **Resolve Conflicts (Keep Local)**, and **Resolve Conflicts (Keep Remote)**.
+- Keep actions apply to **all conflicts in the reviewed project**, not only the displayed file. Keeping local saves unsaved project buffers first. Before keeping remote, save or revert unsaved project buffers.
+- After a successful sync with no remaining conflicts, only olcli-tracked comparisons for that project are closed. Failed operations and unresolved conflicts leave them open; unrelated editors are untouched.
+- You can also edit the local file into its final form and synchronize again, or run the resolution commands from the Command Palette.
+
+Unresolved sync conflicts block cloud compilation. Conflict snapshots are not automatically deleted.
+
+### Background sync and fallback
+
+Background sync is disabled by default. When enabled, it runs without compilation, skips unsaved project editors, and avoids overlapping a save-triggered operation. Consecutive failures increase the delay exponentially, up to eight times the configured interval and a maximum of 15 minutes.
+
+When conflict-aware sync is unavailable but a valid `.olcli.json` is present, the extension can fall back to plain `olcli sync`. **That fallback does not provide the extension's conflict detection.** The output channel explains why it was used. A directory with no valid project metadata is not automatically synchronized.
+
+Session cookies can come from SecretStorage or an `OVERLEAF_SESSION` environment variable inherited by the extension process. Setting a variable in a separate terminal does not necessarily make it available to VS Code.
+
+Do not commit or share the per-machine `.olcli-sync-state.json`, `.olcli-base/`, `.olcli-conflicts/`, or `.olcli-sync.lock` data between machines. These files belong to each machine's local baseline.
+
+## Known limitations
+
+- **Incomplete cloud diagnostics:** Some LaTeX errors may not appear in Problems even when a PDF is generated. Use Overleaf's web interface and compile log to verify the result.
+- **Concurrent uploads are not atomic:** Another writer can still change a remote file between downloading the snapshot and uploading a local result. For simultaneous editing of the same file, use Overleaf's web collaboration or split work across files.
+- **Automatic merging is limited:** Overlapping text edits, binary conflicts, different files independently created at the same path, and delete-versus-edit conflicts require manual review.
+- **Large PDF performance:** The webview uses PDF.js with a fake worker. PDFs of tens of megabytes can take longer to render and consume more memory.
+- **Some fonts may not render correctly:** CMap and standard-font resources are bundled but are not yet connected to the preview. Some CJK or non-embedded fonts can display missing/substitute glyphs.
+- **Local disk use:** Baselines and accumulated conflict snapshots consume space. Resolved conflict snapshots can be removed manually.
+
+## Troubleshooting
+
+### “No project specified”
+
+Open a project previously pulled with olcli, or run **olcli: Pull Project**. A directory path alone is not a remote project binding. Automatic operations skip unconfigured folders; manually invoking a project operation shows a setup hint.
+
+### `ENOENT` or CLI not found
+
+Leave `olcli.executable` empty to use the bundled CLI and VS Code's Node runtime. If you intentionally use an external CLI, configure its absolute path in the extension host's environment. The extension also checks common installation directories and `PNPM_HOME`; a command available in your interactive shell may not be on the extension process's PATH.
+
+### `safe sync unavailable`
+
+Sign in through **olcli: Login to Self-hosted Overleaf** and check the server configuration and local project metadata. A fallback message means the operation is using plain CLI sync without conflict detection.
+
+### Automatic merge did not run
+
+Check that Git is available to the extension host and that the file is text with an existing baseline. Overlapping edits, conflicting new files, binary files, and delete-versus-edit changes are deliberately left for manual resolution.
+
+## Development
+
+```bash
+npm ci
+npm test
+npm run compile
+```
+
+Press **F5** in VS Code to launch an Extension Development Host, or install a locally packaged VSIX.
+
+### Packaging and publishing
+
+Publisher ID: `BunnyLutts` · Extension ID: `BunnyLutts.vsolcli`
 
 ```bash
 npm ci
@@ -43,188 +212,12 @@ npm exec --yes --package=@vscode/vsce@4.1.0 -- vsce ls
 npm exec --yes --package=@vscode/vsce@4.1.0 -- vsce package
 ```
 
-`vsce package` 会自动编译并生成 `vsolcli-<版本号>.vsix`。打包规则会排除源码、测试、本地 olcli 状态及开发产物，同时保留内置 CLI、同步脚本、PDF.js 和图标等运行资源。发布前请在干净的 VS Code 配置中安装 VSIX，验证登录、同步、冲突处理与 PDF 预览。
+Packaging automatically compiles the extension and creates `vsolcli-<version>.vsix`. Runtime dependencies, sync helpers, PDF.js resources, and icons must remain in the package: VS Code does not run `npm install` when installing an extension. Packaging rules exclude source files, tests, local olcli state, and development artifacts.
 
-在 [Marketplace 发布管理页](https://marketplace.visualstudio.com/manage) 选择 `BunnyLutts`，首次发布选择 **New extension → Visual Studio Code** 并上传 VSIX；后续更新必须先递增版本号。打包命令本身不会上传或发布扩展，生成的 VSIX 不提交到 Git。
+Before release, install the VSIX in a clean VS Code profile and test login, sync, conflict resolution, and PDF preview. The extension icon must not exceed **1024 KB**; the included icon is a 256×256 PNG, and an automated test checks its size and dimensions.
 
-### 从源码调试
+At the [Marketplace publisher management page](https://marketplace.visualstudio.com/manage), select `BunnyLutts`, choose **New extension → Visual Studio Code** for the first release, and upload the VSIX. Increment the version before publishing an update to an existing version. Packaging does **not** upload or publish the extension, and generated VSIX files are not committed to Git.
 
-```bash
-npm install
-npm run compile
-```
+## License and acknowledgments
 
-在 VS Code 中按 `F5` 启动扩展开发宿主，或打包安装扩展。
-
-## 快速开始
-
-1. 运行 `olcli: Login to Self-hosted Overleaf`，输入实例地址并完成登录，详见 [Self-hosted 登录与项目面板](#self-hosted-登录与项目面板)。
-2. 打开活动栏的 `olcli` 视图，展开服务器后点击项目即可拉取到本地；也可通过 `olcli.projectRoot` 指定项目目录（默认使用第一个工作区目录）。
-3. 打开项目中的 `.tex` 文件，保存即可自动同步并云端编译；也可使用编辑器右上角的同步并编译按钮。
-
-所有命令的输出位于 `olcli` Output Channel。
-
-## 命令
-
-| 命令 | 说明 |
-| --- | --- |
-| `olcli: Login to Self-hosted Overleaf` | 登录 self-hosted Overleaf 实例并保存会话。 |
-| `olcli: List Projects` | 刷新当前服务器的远端项目列表。 |
-| `olcli: Pull Project` | 将所选项目拉取到本地目录并在当前窗口打开。 |
-| `olcli: Sync Project` | 将本地项目同步到云端。 |
-| `olcli: Compile Project` | 在云端编译并下载 PDF。 |
-| `olcli: Sync and Compile Project` | 同步后编译并下载 PDF。 |
-| `olcli: Sync and Compile` | 编辑器标题栏按钮：同步并编译当前文件。 |
-| `olcli: Open PDF Preview` | 打开 PDF 拆分预览。 |
-| `olcli: Resolve Conflicts (Keep Local)` | 把所有冲突按本地版本解决（需要已登录会话）。 |
-| `olcli: Resolve Conflicts (Keep Remote)` | 把所有冲突按 Overleaf 版本解决（需要已登录会话）。 |
-
-## 配置项
-
-在设置中搜索 `olcli` 即可配置。
-
-| 设置 | 默认值 | 说明 |
-| --- | --- | --- |
-| `olcli.enabled` | `true` | 启用 olcli 自动操作。 |
-| `olcli.autoSyncOnSave` | `true` | 保存文档时执行同步。 |
-| `olcli.autoCompileOnSave` | `true` | 同步成功后继续云端编译。 |
-| `olcli.autoSyncInterval` | `0` | 后台同步间隔（秒）；`0` 关闭。后台同步只同步不编译，有未保存文档时跳过。 |
-| `olcli.disableLatexWorkshopOnSave` | `true` | 关闭 LaTeX Workshop 的 onSave 与 onFileChange 自动编译，交由 olcli 处理云端编译。 |
-| `olcli.pdfOutput` | `./.build/{文件名}.pdf` | 相对项目根目录的 PDF 路径；`{文件名}` 会替换为保存的 TeX 文件名。预览优先使用该路径，找不到时回退到该目录下最新的 PDF。 |
-| `olcli.autoRefreshPreview` | `true` | 编译下载新 PDF 后重新加载拆分预览面板。 |
-| `olcli.syncOnConfigurationChange` | `true` | olcli 设置变化时执行同步与编译。 |
-| `olcli.projectRoot` | `""` | 项目目录；留空使用第一个工作区目录。 |
-| `olcli.executable` | `""` | 留空使用内置 olcli；也可指定外部命令或绝对路径。 |
-| `olcli.baseUrl` | `""` | self-hosted Overleaf 地址，例如 `https://overleaf.example.com`。 |
-| `olcli.cookieName` | `overleaf_session2` | 服务器使用的会话 cookie 名称。 |
-| `olcli.servers` | `[]` | 已配置的 self-hosted 服务器；登录时自动添加。 |
-| `olcli.debounceMs` | `800` | 自动操作启动前的延迟（毫秒）。 |
-| `olcli.compileTimeout` | `120000` | 云端编译的 HTTP 超时（毫秒）。底层 olcli 默认仅 `10000`，完整 LaTeX 编译经常超过该值。 |
-| `olcli.syncTimeout` | `60000` | 安全同步的 HTTP 超时（毫秒），覆盖整项目下载与单文件上传。 |
-
-## Self-hosted 登录与项目面板
-
-### 登录
-
-1. 在命令面板运行 `olcli: Login to Self-hosted Overleaf`。
-2. 输入实例地址，例如 `https://overleaf.example.com`。
-3. 选择登录方式：
-   - **邮箱密码**：输入邮箱与密码，插件自动识别服务器返回的 cookie 名称。
-   - **Session cookie**（适用于 SSO 实例）：粘贴 cookie 值，或 `overleaf.sid=value` 形式的单个会话 cookie。只粘贴值时使用 `olcli.cookieName`（默认 `overleaf_session2`）；特殊名称可在设置中调整，无需每次登录填写。
-
-插件直接使用内置 olcli 客户端验证所选登录方式，再读取远端项目列表。验证成功后仅将会话 cookie 按实例地址保存到 VS Code SecretStorage，**不保存邮箱密码**。凭据通过子进程环境变量传递，不写入设置、命令参数或日志。邮箱密码登录依赖实例支持密码认证；使用 SSO 的实例可使用浏览器 session cookie。插件登录不会修改 olcli 的全局认证配置；自定义 CLI 设置仅用于登录后的项目操作。
-
-### 项目面板
-
-登录后，活动栏会出现独立的 `olcli` 视图，类似 Overleaf Workshop 的项目面板。
-
-- 每个服务器是一级节点，项目显示在对应服务器下。
-- 打开后可通过标题栏按钮登录或刷新，点击项目即可拉取。
-- 拉取目录使用 VS Code 原生目录选择器，完成后在当前窗口打开，并写入 `.olcli-project.json` 保存服务器 URL、cookie 名称和项目 ID 的对应关系。
-- 多个服务器可通过重复登录添加。
-
-## 云端编译与诊断
-
-保存 `.tex` 文件时会将该文件作为云端编译 root，默认将结果下载为 `./.build/{文件名}.pdf`，例如保存 `main.tex` 后生成 `.build/main.pdf`。在 TeX 编辑器右上角点击拆分预览按钮会在旁侧打开预览面板；云端编译下载完成后会自动重新加载已打开的预览面板，并保留当前页与滚动位置。
-
-自动行为可通过 `olcli.enabled`、`olcli.autoSyncOnSave`、`olcli.autoCompileOnSave`、`olcli.pdfOutput`、`olcli.autoRefreshPreview`、`olcli.syncOnConfigurationChange` 和 `olcli.debounceMs` 控制。
-
-### Problems 面板
-
-- 云端日志中的 TeX 错误和 LaTeX 警告会显示在 Problems 面板，来源为 `olcli (cloud)`，支持点击跳转及编辑器波浪线。
-- 可与 LaTeX Workshop 的编辑、补全功能并用（无需开启其本地自动编译）；本扩展的预览不依赖 LaTeX Workshop 的 PDF 查看器。
-- 编译成功生成 PDF 时也会请求日志，以发现仍有 PDF 输出的错误。
-- 当前使用 `olcli output log` 获取日志，会额外触发一次云端编译；复杂嵌套文件日志的定位可能不精确。
-
-云端 PDF 编译失败时，通知会显示 CLI 返回的错误详情，并显示 olcli 输出面板。插件还会尝试下载云端编译日志到对应 PDF 旁的 `.log` 文件并打开它。日志下载调用 `olcli output log`，会再次请求云端编译；若网络、认证或服务器故障导致日志无法下载，原因保留在输出面板中。
-
-### LaTeX Workshop 兼容
-
-如果安装了 LaTeX Workshop，插件默认会在工作区将 `latex-workshop.latex.autoBuild.run` 的 `onSave` 或 `onFileChange` 调整为 `never`，并在同步前确认设置生效，避免保存和同步写入文件时触发本地编译。将 `olcli.disableLatexWorkshopOnSave` 设为 `false` 会停止管理此设置；恢复本地自动编译需要手动修改 LaTeX Workshop 设置。
-
-## 同步与冲突处理
-
-有保存的登录会话时，扩展的自动同步不再直接调用 `olcli sync`，而是调用随包分发的 `sync-guard.mjs`，用内容基线做三方比较；没有会话或缺少项目标记时才回退到 `olcli sync`。
-
-### 判定规则
-
-`sync-guard.mjs` 把上次同步后双方一致的内容 hash 记在 `.olcli-sync-state.json`，内容副本放在 `.olcli-base/`。每次同步比较本地文件、远端文件和基线：
-
-| 本地 / 远端相对基线 | 行为 |
-| --- | --- |
-| 只有本地改 | 上传；本地删除则删除远端 |
-| 只有远端改 | 下载覆盖本地；远端删除则删除本地 |
-| 两边都改、内容相同 | 视为已一致，更新基线 |
-| 两边都改、文本且改动不重叠 | 用 `git merge-file` 三方合并，合并结果写回本地并上传 |
-| 两边都改、有重叠或二进制 | 保留双方：本地文件不动，远端版本存入 `.olcli-conflicts/`，报告冲突，不编译、不覆盖 |
-| 本地删 / 远端改（或反过来） | 记为冲突，不自动删除或复活 |
-| 编辑器中未保存的文档 | 不会被拉取覆盖或删除，记为 `local-unsaved` 冲突 |
-
-上传仍是整文件上传，但只在远端自上次同步后没有变化时才执行；两边同时改同一文件不会再静默丢掉一边的修改。
-
-### 冲突产物与解决
-
-- 冲突时 `.olcli-conflicts/<时间戳>/conflicts.json` 记录每个冲突的路径、类型和 `.remote` 副本文件名；远端版本保存为 `<文件名>.<hash>.remote`。
-- 警告通知会给出冲突数量，可选择 **Show Difference** 在 VS Code 中比较云端副本（左）与本地文件（右）；多个冲突可先选择文件。**Show Conflicts** 在 VS Code 资源管理器中定位本次冲突目录；同一组冲突只提示一次。
-- 差异窗口右上角提供 **Sync Project**（同步）、**Resolve Conflicts (Keep Local)**（保留本地并同步）和 **Resolve Conflicts (Keep Remote)**（保留云端并同步）按钮。保留操作作用于当前差异窗口所属项目的全部冲突；保留本地前会先保存该项目的未保存编辑，保留云端时须先保存或撤销未保存编辑。同步成功且没有剩余冲突后，自动关闭该项目由 olcli 打开的差异页；失败或仍有冲突时保持打开，其他编辑器不受影响。
-- 解决方式：
-  1. 手动把本地文件改成最终内容（或复制 `.remote` 副本覆盖本地），下次保存/同步会自动收敛；
-  2. 命令面板执行 `olcli: Resolve Conflicts (Keep Local)` / `(Keep Remote)`，一次性按本地或远端解决全部冲突。
-- 冲突未解决前不会触发云端编译，`.olcli.json` 的 `lastPull` 也不会推进，避免之后的 `olcli sync` 误判本地副本未修改而覆盖它。
-
-### 定时后台同步
-
-`olcli.autoSyncInterval` 大于 0 时，扩展每隔 N 秒执行一次后台同步：只同步、不编译；有未保存编辑器文档时跳过；与保存触发的同步串行执行；失败按 2 倍退避（最多 8 倍间隔、15 分钟上限），避免服务器或会话异常时反复请求。
-
-它适合两地错开编辑时尽快看到对方改动、把悬空的本地修改推上去，但**不是冲突防线**：真正避免静默丢数据的是上面的三方比较。
-
-### 兼容与回退
-
-- 正常同步成功后 `sync-guard.mjs` 会更新 `.olcli.json` 的 `lastPull`/`lastSync`/`remoteManifest`，之后手动运行 `olcli compile`、`olcli pull` 等命令仍然有效。
-- 没有可用会话（例如只在终端设置 `OVERLEAF_SESSION`、未在扩展中登录）或项目缺少 `.olcli.json`/`.olcli-project.json` 时，回退到 `olcli sync`；该路径没有冲突检测，输出面板会记录回退原因。
-- 状态文件都是点文件，olcli 扫描会跳过，不会上传到 Overleaf；但请**不要**把 `.olcli-sync-state.json`、`.olcli-base/`、`.olcli-conflicts/`、`.olcli-sync.lock` 提交到 git，也不要放在两台机器共享的同步盘里——它们是每台机器自己的基线。
-
-### 已知边界
-
-- 自动合并依赖 `git merge-file`；没有 git 时冲突只保留副本，不自动合并。
-- 两台机器在“下载快照”和“上传”之间仍有很小的竞态窗口：一端刚判断远端未变、另一端随即上传同名文件时，整文件上传仍可能覆盖对方。窗口远小于旧的 mtime 规则，但无法用 HTTP 整文件接口彻底消除；真正同时改同一文件请用 Overleaf 网页实时协作，或拆成每人独立的文件。
-- `.olcli-conflicts/` 不会自动清理，解决冲突后可手动删除。
-
-## 已知问题
-
-- **云端语法错误可能无法正常显示**：保存或手动同步并编译时，仍会继续请求编译并生成或下载 PDF，部分错误语法可能被忽略，Problems 面板也未必能准确报告。生成 PDF 或显示编译完成不代表源文件没有错误。此问题尚未解决；目前请在 Overleaf 网页端检查编译错误和日志，插件的错误提示仅作辅助参考。
-- **超大 PDF 预览较慢**：预览由 pdf.js 在 webview 内渲染（fake worker），数十 MB 级别的 PDF 首屏可能较慢、占用内存较高。
-- **部分 CJK/未嵌入字体可能缺字**：预览未启用 pdf.js 的 cMap 与 standard-14 字体数据（资源随插件打包但尚未接入），个别 PDF 的文字可能显示替补字形；版面、图形不受影响。
-- **同时编辑同一文件仍需人工处理**：自动合并只覆盖“改动不重叠的文本文件”；重叠修改、二进制文件、新增同名文件和“删除 vs 修改”会保留双方并要求人工选择，详见 [同步与冲突处理](#同步与冲突处理)。
-- **两台机器同一瞬间上传仍有极小竞态**：冲突检测能消除“先后编辑”造成的静默覆盖，但无法消除“下载快照后、上传前”几毫秒内对方也上传的窗口；同时改同一文件请优先用 Overleaf 网页实时协作。
-- **冲突副本与基线占用磁盘**：`.olcli-base/` 保存一份可合并文件的内容副本，`.olcli-conflicts/` 会累积历史冲突副本，大型项目可定期清理。
-
-## 故障排查
-
-### 提示 `ENOENT` / 找不到 olcli
-
-`olcli.executable` 默认留空，使用随插件打包的 CLI 和 VS Code Node 运行时。已有设置若为 `olcli` 或外部路径，请清空以使用内置版本。
-
-如果终端能运行 `olcli`，但插件提示 `ENOENT`，通常是 VS Code 扩展进程的 PATH 与终端不同：
-
-- 插件会额外查找 `PNPM_HOME` 和常见全局安装目录。
-- 也可将 `olcli.executable` 设置为 `command -v olcli` 返回的绝对路径。
-- 该路径必须位于扩展实际运行的环境中（例如 Remote SSH 或 WSL 远端），不能使用另一台机器的路径。
-
-启动时查询失败会记录到 olcli 输出面板；手动刷新仍显示错误时，请检查上述配置。
-
-### 提示 `safe sync unavailable` / 没有冲突检测
-
-输出面板出现 `safe sync unavailable ... falling back to \`olcli sync\`` 时，说明扩展没有可用的登录会话或 `olcli.baseUrl`：用 `olcli: Login to Self-hosted Overleaf` 登录一次即可启用安全同步。回退路径的行为与旧版一致，没有冲突检测。
-
-### 出现 `.olcli-conflicts` 目录
-
-说明有文件在本地和 Overleaf 两边都被修改过，扩展保留了双方。按 [冲突产物与解决](#冲突产物与解决) 处理后，下一次同步会自动收敛；确认不再需要后可以手动删除该目录。
-
-### 自动合并没有生效
-
-只有“双方都修改过的文本文件”会尝试三方合并。以下情况只保留冲突副本：`git` 不可用（缺少 `git merge-file`）、文件是二进制、冲突文件是两边新增的同名文件、或一侧删除另一侧修改。
-
-## 许可证
-
-本项目采用 MIT 许可证，详见 [LICENSE](LICENSE)。打包产物包含的第三方依赖及其许可证见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
+This extension is licensed under the [MIT License](LICENSE). See [Third-Party Notices](THIRD_PARTY_NOTICES.md) for bundled dependencies and their licenses, including olcli and Mozilla PDF.js.

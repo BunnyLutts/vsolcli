@@ -47,9 +47,9 @@ export function activate(context: vscode.ExtensionContext): void {
         // Clear the handle before running: a stale handle would make the
         // periodic tick believe a save-triggered sync is forever pending.
         timer = undefined;
-        void syncAndMaybeCompile(compile, output, projectDirectory, savedFile, server);
+        void syncAndMaybeCompile(compile, output, projectDirectory, savedFile, server, false, true);
       }, debounceMs());
-    } else void syncAndMaybeCompile(compile, output, projectDirectory, savedFile, server);
+    } else return syncAndMaybeCompile(compile, output, projectDirectory, savedFile, server);
   };
 
   context.subscriptions.push(
@@ -65,7 +65,7 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand('olcli.syncAndCompileCurrent', () => {
       const document = vscode.window.activeTextEditor?.document;
       const project = document && projectRootFor(document.uri.fsPath);
-      if (!document || !project) { vscode.window.showWarningMessage('olcli: open a TeX file inside a project first.'); return; }
+      if (!document || !project) { vscode.window.showWarningMessage(PROJECT_SETUP_HINT); return; }
       run(true, false, project, document.uri.fsPath, serverForProject(project));
     }),
     vscode.commands.registerCommand('olcli.login', async () => { if (await login(output)) await projects.refresh(); }),
@@ -75,7 +75,7 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand('olcli.resolveConflictsLocal', (uri?: vscode.Uri) => resolveConflicts('local', output, conflictProject(uri))),
     vscode.commands.registerCommand('olcli.resolveConflictsRemote', (uri?: vscode.Uri) => resolveConflicts('remote', output, conflictProject(uri))),
     vscode.workspace.onDidSaveTextDocument(document => {
-      if (approvalSaves.has(document.uri.fsPath)) return;
+      if (document.uri.scheme !== 'file' || approvalSaves.has(document.uri.fsPath)) return;
       // Deliberately not gated on `running`: a save during a long sync or cloud
       // compile is coalesced into `pending` instead of being discarded. There is
       // no time-based suppression window: swallowing saves to avoid a re-run is
@@ -116,7 +116,7 @@ interface Project { id: string; name: string; server: Server; }
 interface ServerNode { server: Server; }
 // The most recent sync request. A save that lands while a run is in progress
 // replaces this instead of being dropped, and is served when that run finishes.
-interface SyncRequest { compile: boolean; projectDirectory?: string; savedFile?: string; server?: Server; background?: boolean; }
+interface SyncRequest { compile: boolean; projectDirectory?: string; savedFile?: string; server?: Server; background?: boolean; automatic?: boolean; }
 
 interface SyncConflict { path: string; kind: string; remoteCopy?: string; }
 // Summary printed by sync-guard.mjs. Counts are present on every completed run;
@@ -273,14 +273,29 @@ function root(): string | undefined {
   const configured = vscode.workspace.getConfiguration('olcli').get<string>('projectRoot', '').trim();
   return configured ? (path.isAbsolute(configured) ? configured : path.resolve(vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? process.cwd(), configured)) : vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
 }
+const PROJECT_SETUP_HINT = 'olcli: no project specified for this directory. Open a synced project containing .olcli.json, or use olcli: Pull Project first.';
+class ProjectNotConfiguredError extends Error {}
+
+/** A workspace path or an empty marker is not itself an olcli project. */
+function hasProjectMetadata(directory: string, includeMapping = true): boolean {
+  for (const name of includeMapping ? ['.olcli.json', '.olcli-project.json'] : ['.olcli.json']) {
+    try {
+      const meta = JSON.parse(fs.readFileSync(path.join(directory, name), 'utf8')) as { projectId?: unknown; projectName?: unknown } | null;
+      if (typeof meta?.projectId === 'string' && meta.projectId.trim()) return true;
+      if (name === '.olcli.json' && typeof meta?.projectName === 'string' && meta.projectName.trim()) return true;
+    } catch { /* Missing, unreadable or malformed metadata cannot select a project. */ }
+  }
+  return false;
+}
+
 function projectRootFor(file: string): string | undefined {
   const configured = root();
-  if (configured && isWithin(file, configured)) return configured;
   let directory = path.dirname(file);
   while (true) {
-    if (fs.existsSync(path.join(directory, '.olcli.json'))) return directory;
+    // Prefer the nearest project, even when the workspace contains other projects.
+    if (hasProjectMetadata(directory)) return directory;
     const parent = path.dirname(directory);
-    if (parent === directory) return undefined;
+    if (parent === directory || (configured && directory === path.resolve(configured))) return undefined;
     directory = parent;
   }
 }
@@ -295,13 +310,15 @@ function serverForProject(directory: string): Server | undefined {
   } catch { return undefined; }
 }
 
-async function syncAndMaybeCompile(compile: boolean, output: vscode.OutputChannel, projectDirectory?: string, savedFile?: string, server?: Server, background = false): Promise<boolean> {
-  if (running) { pending = { compile, projectDirectory, savedFile, server, background }; return false; }
+async function syncAndMaybeCompile(compile: boolean, output: vscode.OutputChannel, projectDirectory?: string, savedFile?: string, server?: Server, background = false, automatic = false): Promise<boolean> {
+  if (!enabled()) return false;
   const cwd = projectDirectory ?? root();
-  if (!cwd) {
-    if (!background) vscode.window.showWarningMessage('olcli: open a workspace or set olcli.projectRoot.');
+  if (!cwd || !hasProjectMetadata(cwd)) {
+    if (automatic || background) output.appendLine('automatic sync skipped: no olcli project configured');
+    else vscode.window.showWarningMessage(PROJECT_SETUP_HINT);
     return false;
   }
+  if (running) { pending = { compile, projectDirectory: cwd, savedFile, server, background, automatic }; return false; }
   running = true;
   try {
     await disableLocalLatexBuild();
@@ -323,7 +340,10 @@ async function syncAndMaybeCompile(compile: boolean, output: vscode.OutputChanne
     if (!background) vscode.window.setStatusBarMessage(compile ? 'olcli: synced, cloud compiled, and downloaded' : 'olcli: synced', 3000);
     return true;
   } catch (error) {
-    if (background) output.appendLine(`olcli background sync failed: ${message(error)}`);
+    if (error instanceof ProjectNotConfiguredError) {
+      if (automatic || background) output.appendLine('automatic sync skipped: no CLI-compatible olcli project configured');
+      else vscode.window.showWarningMessage(PROJECT_SETUP_HINT);
+    } else if (background) output.appendLine(`olcli background sync failed: ${message(error)}`);
     else vscode.window.showErrorMessage(`olcli failed: ${message(error)}`);
     return false;
   } finally {
@@ -331,7 +351,7 @@ async function syncAndMaybeCompile(compile: boolean, output: vscode.OutputChanne
     armPeriodicSync(output);
     const next = pending;
     pending = undefined;
-    if (next) void syncAndMaybeCompile(next.compile, output, next.projectDirectory, next.savedFile, next.server, next.background);
+    if (next) void syncAndMaybeCompile(next.compile, output, next.projectDirectory, next.savedFile, next.server, next.background, next.automatic);
   }
 }
 
@@ -349,6 +369,7 @@ async function syncProject(cwd: string, output: vscode.OutputChannel, server?: S
   const summary = await runSafeSync(cwd, output, server, prefer);
   if (!summary) {
     if (prefer) throw new Error('resolving conflicts needs a stored olcli session; log in first, then retry');
+    if (!hasProjectMetadata(cwd, false)) throw new ProjectNotConfiguredError(PROJECT_SETUP_HINT);
     output.appendLine('safe sync unavailable (no stored session or project marker); falling back to `olcli sync` without conflict detection');
     await execute('sync', cwd, output, server);
     return { conflicts: [], skipped: false };
@@ -490,6 +511,7 @@ async function resolveConflicts(prefer: ConflictPreference, output: vscode.Outpu
   if (!enabled()) return;
   const cwd = projectDirectory ?? root();
   if (!cwd) { vscode.window.showWarningMessage('olcli: open a workspace or set olcli.projectRoot.'); return; }
+  if (!hasProjectMetadata(cwd)) { vscode.window.showWarningMessage(PROJECT_SETUP_HINT); return; }
   if (running) { vscode.window.showWarningMessage('olcli: a sync is already running.'); return; }
   running = true;
   try {
@@ -521,7 +543,7 @@ async function resolveConflicts(prefer: ConflictPreference, output: vscode.Outpu
     armPeriodicSync(output);
     const next = pending;
     pending = undefined;
-    if (next) void syncAndMaybeCompile(next.compile, output, next.projectDirectory, next.savedFile, next.server, next.background);
+    if (next) void syncAndMaybeCompile(next.compile, output, next.projectDirectory, next.savedFile, next.server, next.background, next.automatic);
   }
 }
 
@@ -547,7 +569,7 @@ function armPeriodicSync(output: vscode.OutputChannel): void {
 async function periodicSyncTick(output: vscode.OutputChannel): Promise<void> {
   if (!enabled()) return;
   const cwd = root();
-  if (!cwd || !fs.existsSync(path.join(cwd, '.olcli.json'))) return;
+  if (!cwd || !hasProjectMetadata(cwd)) return;
   // Never queue behind a save-triggered run: that run already serves the newer
   // request, and a queued background sync would only repeat the download.
   if (running) { output.appendLine('periodic sync skipped: another sync is running'); return; }
@@ -697,9 +719,10 @@ async function openPdfPreview(uri: vscode.Uri | undefined, output: vscode.Output
 }
 
 async function compileOnly(output: vscode.OutputChannel): Promise<void> {
-  if (running) { pending = { compile: true, projectDirectory: root() }; return; }
+  if (!enabled()) return;
   const cwd = root();
-  if (!cwd) { vscode.window.showWarningMessage('olcli: open a workspace or set olcli.projectRoot.'); return; }
+  if (!cwd || !hasProjectMetadata(cwd, false)) { vscode.window.showWarningMessage(PROJECT_SETUP_HINT); return; }
+  if (running) { pending = { compile: true, projectDirectory: cwd }; return; }
   running = true;
   try {
     await execute('compile', cwd, output);
@@ -711,7 +734,7 @@ async function compileOnly(output: vscode.OutputChannel): Promise<void> {
     armPeriodicSync(output);
     const next = pending;
     pending = undefined;
-    if (next) void syncAndMaybeCompile(next.compile, output, next.projectDirectory, next.savedFile, next.server, next.background);
+    if (next) void syncAndMaybeCompile(next.compile, output, next.projectDirectory, next.savedFile, next.server, next.background, next.automatic);
   }
 }
 
