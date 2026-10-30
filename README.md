@@ -31,7 +31,7 @@ In Remote SSH or WSL environments, the extension and any configured external too
 
 Install a packaged VSIX using **Extensions: Install from VSIX...** in VS Code, then reload the window.
 
-The Marketplace extension identifier is `BunnyLutts.vsolcli`. See [Packaging and publishing](#packaging-and-publishing) to build a VSIX from source.
+The Marketplace extension identifier is `BunnyLutts.vsolcli`. See [Building a VSIX](#building-a-vsix) to package from source.
 
 ## Quick start
 
@@ -195,28 +195,21 @@ Check that Git is available to the extension host and that the file is text with
 
 ```bash
 npm ci
-npm test
-npm run compile
+npm test      # compiles, then runs the test suite
 ```
 
-Press **F5** in VS Code to launch an Extension Development Host, or install a locally packaged VSIX.
+Press **F5** in VS Code to launch an Extension Development Host. The launch configuration compiles first. For iterative work, run `npm run watch` in a terminal and use **Developer: Reload Window** inside the Extension Development Host after a change.
 
-### Packaging and publishing
-
-Publisher ID: `BunnyLutts` · Extension ID: `BunnyLutts.vsolcli`
+### Building a VSIX
 
 ```bash
-npm ci
 npm test
-npm exec --yes --package=@vscode/vsce@4.1.0 -- vsce ls
 npm exec --yes --package=@vscode/vsce@4.1.0 -- vsce package
 ```
 
-Packaging automatically compiles the extension and creates `vsolcli-<version>.vsix`. Runtime dependencies, sync helpers, PDF.js resources, and icons must remain in the package: VS Code does not run `npm install` when installing an extension. Packaging rules exclude source files, tests, local olcli state, and development artifacts.
+`vsce package` compiles via the `vscode:prepublish` script and writes `vsolcli-<version>.vsix`. Runtime dependencies, sync helpers, PDF.js resources, and icons must stay in the package: VS Code does not run `npm install` when installing an extension. Packaging rules exclude sources, tests, local olcli state, and development artifacts.
 
-Before release, install the VSIX in a clean VS Code profile and test login, sync, conflict resolution, and PDF preview. The extension icon must not exceed **1024 KB**; the included icon is a 256×256 PNG, and an automated test checks its size and dimensions.
-
-At the [Marketplace publisher management page](https://marketplace.visualstudio.com/manage), select `BunnyLutts`, choose **New extension → Visual Studio Code** for the first release, and upload the VSIX. Increment the version before publishing an update to an existing version. Packaging does **not** upload or publish the extension, and generated VSIX files are not committed to Git.
+Install the resulting VSIX in a clean VS Code profile to verify login, sync, conflict resolution, and PDF preview. The extension icon must not exceed **1024 KB**; an automated test checks its size and dimensions.
 
 ## License and acknowledgments
 

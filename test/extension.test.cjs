@@ -3,6 +3,8 @@ const { test } = require('node:test');
 const Module = require('node:module');
 const { EventEmitter } = require('node:events');
 const path = require('node:path');
+const fs = require('node:fs');
+const os = require('node:os');
 
 test('self-hosted login, project tree, pull and authentication failures', async () => {
   const commands = new Map();
@@ -89,12 +91,18 @@ test('self-hosted login, project tree, pull and authentication failures', async 
   const projects = await provider.getChildren(servers[0]);
   assert.deepEqual(projects.map(({ id, name }) => ({ id, name })), [{ id: 'abc123', name: 'My Paper' }]);
   assert.equal(provider.getTreeItem(projects[0]).command.command, 'olcli.pullProject');
-  inputs = [process.cwd()];
-  await commands.get('olcli.pullProject')(projects[0]);
-  const pull = calls.find(call => call.args.includes('pull'));
-  assert.equal(pull.args[pull.args.indexOf('pull') + 1], 'abc123');
-  assert.equal(pull.options.env.OVERLEAF_SESSION, 'private-cookie');
-  assert.equal(opened[0][0], 'vscode.openFolder');
+  // Pull into a scratch directory: writing the marker into the repository root
+  // would leave the working tree looking like a mapped olcli project.
+  const pullTarget = fs.mkdtempSync(path.join(os.tmpdir(), 'vsolcli-pull-'));
+  try {
+    inputs = [pullTarget];
+    await commands.get('olcli.pullProject')(projects[0]);
+    const pull = calls.find(call => call.args.includes('pull'));
+    assert.equal(pull.args[pull.args.indexOf('pull') + 1], 'abc123');
+    assert.equal(pull.options.env.OVERLEAF_SESSION, 'private-cookie');
+    assert.equal(opened[0][0], 'vscode.openFolder');
+    assert.equal(JSON.parse(fs.readFileSync(path.join(pullTarget, '.olcli-project.json'), 'utf8')).projectId, 'abc123');
+  } finally { fs.rmSync(pullTarget, { recursive: true, force: true }); }
   method = 'Email and password';
   inputs = ['https://password.example', 'user@example.com', 'private-password'];
   await commands.get('olcli.login')();

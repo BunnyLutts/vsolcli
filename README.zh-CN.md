@@ -34,29 +34,25 @@
 
 > 打包 VSIX 时必须保留运行依赖；VS Code 不会在安装扩展时执行 `npm install`。
 
-### 打包与发布
-
-Marketplace Publisher ID 为 `BunnyLutts`，扩展 ID 为 `BunnyLutts.vsolcli`。
+### 打包 VSIX
 
 ```bash
-npm ci
 npm test
-npm exec --yes --package=@vscode/vsce@4.1.0 -- vsce ls
 npm exec --yes --package=@vscode/vsce@4.1.0 -- vsce package
 ```
 
-`vsce package` 会自动编译并生成 `vsolcli-<版本号>.vsix`。打包规则会排除源码、测试、本地 olcli 状态及开发产物，同时保留内置 CLI、同步脚本、PDF.js 和图标等运行资源。发布前请在干净的 VS Code 配置中安装 VSIX，验证登录、同步、冲突处理与 PDF 预览。
+`vsce package` 通过 `vscode:prepublish` 脚本自动编译，并生成 `vsolcli-<版本号>.vsix`。打包规则会排除源码、测试、本地 olcli 状态及开发产物，同时保留内置 CLI、同步脚本、PDF.js 和图标等运行资源。生成的 VSIX 不提交到 Git。
 
-在 [Marketplace 发布管理页](https://marketplace.visualstudio.com/manage) 选择 `BunnyLutts`，首次发布选择 **New extension → Visual Studio Code** 并上传 VSIX；后续更新必须先递增版本号。打包命令本身不会上传或发布扩展，生成的 VSIX 不提交到 Git。
+在干净的 VS Code 配置中安装 VSIX，验证登录、同步、冲突处理与 PDF 预览。扩展图标不得超过 **1024 KB**，测试中会自动检查尺寸与大小。
 
 ### 从源码调试
 
 ```bash
-npm install
-npm run compile
+npm ci
+npm test      # 先编译，再运行测试
 ```
 
-在 VS Code 中按 `F5` 启动扩展开发宿主，或打包安装扩展。
+在 VS Code 中按 `F5` 启动扩展开发宿主，启动前会自动编译。持续开发时可在终端运行 `npm run watch`，修改后在开发宿主中执行 **Developer: Reload Window**。
 
 ## 快速开始
 
