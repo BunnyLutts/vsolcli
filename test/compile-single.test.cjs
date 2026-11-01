@@ -12,7 +12,7 @@ const path = require('node:path');
 const LOG_TEXT = 'main.tex:3: Undefined control sequence.\n! LaTeX Error: Something bad.\n';
 
 function startOverleaf({ status }) {
-  const state = { compileCalls: 0, authHeader: undefined };
+  const state = { compileCalls: 0, authHeader: undefined, cookie: undefined };
   const server = http.createServer((req, res) => {
     const url = new URL(req.url, 'http://127.0.0.1');
     const send = (code, type, body) => { res.writeHead(code, { 'Content-Type': type }); res.end(body); };
@@ -22,6 +22,7 @@ function startOverleaf({ status }) {
     if (/^\/project\/[^/]+\/compile$/.test(url.pathname) && req.method === 'POST') {
       state.compileCalls++;
       state.authHeader = req.headers['x-csrf-token'];
+      state.cookie = req.headers.cookie;
       req.resume();
       return req.on('end', () => send(200, 'application/json', JSON.stringify({
         status,
@@ -43,11 +44,11 @@ function startOverleaf({ status }) {
   })));
 }
 
-function runCompile(baseUrl, pdfPath, cwd) {
+function runCompile(baseUrl, pdfPath, cwd, session = 'test-session', cookieName = 'overleaf_session2') {
   return new Promise(resolve => {
     const child = spawn(process.execPath,
-      [path.join(__dirname, '..', 'compile.mjs'), baseUrl, 'overleaf_session2', '5000', pdfPath, 'main.tex'],
-      { cwd, env: { ...process.env, OVERLEAF_SESSION: 'test-session' } });
+      [path.join(__dirname, '..', 'compile.mjs'), baseUrl, cookieName, '5000', pdfPath, 'main.tex'],
+      { cwd, env: { ...process.env, OVERLEAF_SESSION: session } });
     let stdout = '';
     let stderr = '';
     child.stdout.on('data', data => { stdout += data; });
@@ -78,6 +79,27 @@ test('one cloud compile yields both the PDF and the log', async () => {
     // The whole point: pdf + log came from a single POST /compile.
     assert.equal(state.compileCalls, 1, `expected 1 cloud compile, saw ${state.compileCalls}`);
     assert.equal(state.authHeader, 'test-csrf');
+  } finally {
+    server.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('CLI .olauth credentials compile once without an extension-stored session', async () => {
+  const { server, state, baseUrl } = await startOverleaf({ status: 'success' });
+  const dir = projectDir();
+  const pdfPath = path.join(dir, '.build', 'main.pdf');
+  fs.writeFileSync(path.join(dir, '.olauth'), 'overleaf.sid=local-test-session; other=value');
+  try {
+    const result = await runCompile(baseUrl, pdfPath, dir, '', 'overleaf.sid');
+    assert.equal(result.code, 0, result.stderr);
+    assert.equal(state.compileCalls, 1);
+    assert.match(state.cookie, /(?:^|; )overleaf\.sid=local-test-session(?:;|$)/);
+    const summary = JSON.parse(result.stdout);
+    assert.equal(summary.pdf, true);
+    assert.equal(summary.log, true);
+    assert.ok(!result.stdout.includes('local-test-session'));
+    assert.ok(!result.stderr.includes('local-test-session'));
   } finally {
     server.close();
     fs.rmSync(dir, { recursive: true, force: true });

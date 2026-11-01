@@ -618,29 +618,12 @@ async function compileAndDownload(cwd: string, savedFile: string | undefined, ou
     return;
   }
 
-  // Fallback when there is no stored session or project marker. The CLI has no
-  // command returning both artifacts, so this costs a second cloud compile.
+  // External CLI compatibility: `output log` would start another compile, even
+  // after a timeout while the first compile is still running. Never do that.
   const pdfArgs = ['pdf', '-o', outputPath];
   if (resource) pdfArgs.push('-r', resource);
-  try {
-    await executeCapture(pdfArgs, cwd, output, undefined, server);
-  } catch (error) {
-    const logArgs = ['output', 'log', '-o', logPath];
-    if (resource) logArgs.push('-r', resource);
-    output.show(true);
-    try {
-      await executeCapture(logArgs, cwd, output, undefined, server);
-      await publishCloudDiagnostics(logPath, cwd, savedFile);
-      await vscode.commands.executeCommand('vscode.open', vscode.Uri.file(logPath), { preview: false, preserveFocus: true });
-    } catch (logError) { output.appendLine(`Unable to download cloud compile log: ${message(logError)}`); }
-    throw error;
-  }
-  const logArgs = ['output', 'log', '-o', logPath];
-  if (resource) logArgs.push('-r', resource);
-  try {
-    await executeCapture(logArgs, cwd, output, undefined, server);
-    await publishCloudDiagnostics(logPath, cwd, savedFile);
-  } catch (error) { output.appendLine(`Unable to update cloud diagnostics: ${message(error)}`); }
+  output.appendLine('CLI compile fallback: cloud log download skipped to avoid a second compile.');
+  await executeCapture(pdfArgs, cwd, output, undefined, server);
   if (config.get<boolean>('autoRefreshPreview', true)) {
     await refreshPdfPreview(outputPath);
   }
@@ -649,8 +632,8 @@ async function compileAndDownload(cwd: string, savedFile: string | undefined, ou
 interface CompileSummary { status: string; pdf: boolean; log: boolean; logPath?: string; failureHint?: string; }
 
 // Compile through the client library so one request produces both the PDF and the
-// compile log. Returns undefined when the wrapper is not usable, so the caller can
-// fall back to the CLI.
+// compile log. The bundled wrapper resolves CLI credentials itself. Returns
+// undefined only when the wrapper cannot serve this configuration.
 async function compileWithClient(outputPath: string, resource: string | undefined, cwd: string, output: vscode.OutputChannel, server?: Server): Promise<CompileSummary | undefined> {
   const config = vscode.workspace.getConfiguration('olcli');
   const baseUrl = server?.url ?? config.get<string>('baseUrl', '').trim();
@@ -658,7 +641,9 @@ async function compileWithClient(outputPath: string, resource: string | undefine
   if (!fs.existsSync(path.join(cwd, '.olcli.json')) && !fs.existsSync(path.join(cwd, '.olcli-project.json'))) return undefined;
   const stored = await secrets.get(`olcli:${baseUrl.replace(/\/$/, '')}`);
   const session = (stored ? JSON.parse(stored) as Record<string, string> : {}).OVERLEAF_SESSION ?? process.env.OVERLEAF_SESSION;
-  if (!session) return undefined;
+  // The bundled wrapper also reads the CLI's .olauth/global credentials.
+  // External executables may use a different credential store.
+  if (!session && config.get<string>('executable', '').trim()) return undefined;
   const cookieName = (server?.cookieName ?? config.get<string>('cookieName', '').trim()) || 'overleaf_session2';
   // The CLI defaults to a 10s HTTP timeout, which a cloud compile routinely exceeds.
   const timeout = Math.max(1000, config.get<number>('compileTimeout', 120000));
@@ -668,7 +653,7 @@ async function compileWithClient(outputPath: string, resource: string | undefine
   // at `timeout`, and a run makes three of them (compile, PDF, log) plus the
   // bootstrap, so scale past that rather than sitting just above one request.
   const processTimeout = timeout * 4;
-  const text = await spawnCapture(process.execPath, [script, ...args], cwd, output, { OVERLEAF_SESSION: session }, { ELECTRON_RUN_AS_NODE: '1' }, false, processTimeout);
+  const text = await spawnCapture(process.execPath, [script, ...args], cwd, output, session ? { OVERLEAF_SESSION: session } : undefined, { ELECTRON_RUN_AS_NODE: '1' }, false, processTimeout);
   return JSON.parse(text) as CompileSummary;
 }
 
@@ -752,7 +737,10 @@ async function executeCapture(args: string[], cwd: string, output: vscode.Output
   const fullArgs = !environment && baseUrl && !args.includes('--base-url') ? ['--base-url', baseUrl, ...(cookieName ? ['--cookie-name', cookieName] : []), ...args] : args;
   const stored = environment ? undefined : await secrets.get(`olcli:${baseUrl.replace(/\/$/, '')}`);
   const credentials = environment ?? (stored ? JSON.parse(stored) as Record<string, string> : undefined);
-  return spawnCapture(executable, [...launch.prefix, ...fullArgs], cwd, output, credentials, launch.environment, !environment);
+  const compiling = !environment && ['compile', 'pdf', 'output'].includes(args[0]);
+  const timeout = compiling ? Math.max(1000, vscode.workspace.getConfiguration('olcli').get<number>('compileTimeout', 120000)) : 0;
+  const timedArgs = compiling ? ['--timeout', String(timeout), ...fullArgs] : fullArgs;
+  return spawnCapture(executable, [...launch.prefix, ...timedArgs], cwd, output, credentials, launch.environment, !environment, timeout * 4);
 }
 
 function spawnCapture(executable: string, argv: string[], cwd: string, output: vscode.OutputChannel,

@@ -40,24 +40,68 @@ test('a save compiles once and gets the log from that same compile', async () =>
   }
 });
 
-test('without a stored session the CLI fallback still compiles', async () => {
+test('without a stored session the bundled wrapper uses CLI credentials', async () => {
   delete process.env.OVERLEAF_SESSION;
   const root = projectDir('vsolcli-fallback-');
   try {
     const h = harness({ projectRoot: root, storedSession: undefined });
     try {
       await h.commands.get('olcli.syncAndCompileCurrent')();
-      await waitFor(() => h.calls.some(call => call.argv.includes('pdf')), 'the CLI pdf fallback');
+      await waitFor(() => h.calls.some(call => call.argv[0].endsWith('compile.mjs')), 'the bundled compile wrapper');
 
-      assert.equal(h.calls.filter(isSafeSync).length, 0, 'the sidecar needs a stored session');
-      assert.equal(h.calls.filter(isCliSync).length, 1, 'plain olcli sync should run');
-      assert.equal(h.calls.filter(call => call.argv.includes('pdf')).length, 1);
-      assert.equal(h.calls.filter(call => call.argv.includes('output')).length, 1);
-      assert.equal(h.calls.filter(call => call.argv[0].endsWith('compile.mjs')).length, 0);
+      assert.equal(h.calls.filter(isSafeSync).length, 0, 'sync still uses its existing credential fallback');
+      assert.equal(h.calls.filter(isCliSync).length, 1);
+      assert.equal(h.calls.filter(call => call.argv.includes('pdf')).length, 0);
+      assert.equal(h.calls.filter(call => call.argv.includes('output')).length, 0);
+      const wrapper = h.calls.find(call => call.argv[0].endsWith('compile.mjs'));
+      assert.equal(wrapper.argv[3], '120000');
+      assert.equal(wrapper.options.env.OVERLEAF_SESSION, undefined, 'let the wrapper resolve CLI credentials');
     } finally {
       h.dispose();
     }
   } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+for (const fails of [false, true]) {
+  test(`external CLI uses compileTimeout without a second compile (${fails ? 'failure' : 'success'})`, async () => {
+    delete process.env.OVERLEAF_SESSION;
+    const root = projectDir('vsolcli-external-');
+    const h = harness({ projectRoot: root, settings: { executable: 'external-olcli', compileTimeout: 45000 } });
+    try {
+      if (fails) h.failNext('pdf', { stderr: 'Request timeout after 45000ms' });
+      await h.commands.get('olcli.syncAndCompileCurrent')();
+      await waitFor(() => fails ? h.errors.length > 0 : h.output.includes('CLI compile fallback:'), 'CLI fallback result');
+      await waitFor(() => h.calls.some(call => call.argv.includes('pdf')), 'CLI pdf invocation');
+      const pdf = h.calls.filter(call => call.argv.includes('pdf'));
+      assert.equal(pdf.length, 1);
+      assert.equal(pdf[0].argv[pdf[0].argv.indexOf('--timeout') + 1], '45000');
+      assert.equal(h.calls.filter(call => call.argv.includes('output')).length, 0);
+      assert.equal(h.errors.length, fails ? 1 : 0);
+      if (fails) assert.match(h.errors[0], /45000ms/);
+    } finally {
+      h.dispose();
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+}
+
+test('external CLI compile watchdog releases the running state', async () => {
+  delete process.env.OVERLEAF_SESSION;
+  const root = projectDir('vsolcli-external-watchdog-');
+  const h = harness({ projectRoot: root, settings: { executable: 'external-olcli', compileTimeout: 1000 } });
+  try {
+    h.hold('pdf');
+    const run = h.commands.get('olcli.syncAndCompileCurrent')();
+    await waitFor(() => h.errors.some(text => /did not finish/.test(text)), 'external CLI watchdog', 8000);
+    await run;
+    assert.equal(h.calls.filter(call => call.argv.includes('output')).length, 0);
+    const before = h.calls.filter(isSync).length;
+    await h.commands.get('olcli.sync')();
+    assert.ok(h.calls.filter(isSync).length > before);
+  } finally {
+    h.dispose();
     fs.rmSync(root, { recursive: true, force: true });
   }
 });

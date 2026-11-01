@@ -11,7 +11,7 @@
 //
 // Usage: node compile.mjs <baseUrl> <cookieName> <timeoutMs> <pdfPath> [resourcePath]
 //   cwd       project directory containing .olcli.json
-//   env       OVERLEAF_SESSION
+//   auth      OVERLEAF_SESSION, project .olauth, or the CLI's stored credentials
 //   stdout    JSON summary, see `summary` below
 import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
@@ -40,13 +40,26 @@ function projectIdIn(directory) {
 }
 
 async function main() {
-  const session = process.env.OVERLEAF_SESSION;
-  if (!session) throw new Error('compile.mjs requires OVERLEAF_SESSION');
+  // Use the same credential sources as the bundled CLI, including project
+  // .olauth and global config. A VS Code SecretStorage entry is not required.
+  const config = await import(pathToFileURL(path.join(path.dirname(cli), 'config.js')).href);
+  if (cookieName) process.env.OVERLEAF_COOKIE_NAME = cookieName;
+  const session = config.getSessionCookie();
+  const password = config.getPasswordCredentials();
+  if (!session && !password) throw new Error('No Overleaf credentials found. Log in with olcli first.');
   if (!baseUrl || !pdfPath) throw new Error('usage: compile.mjs <baseUrl> <cookieName> <timeoutMs> <pdfPath> [resourcePath]');
   const projectId = projectIdIn(process.cwd());
   if (!projectId) throw new Error('No .olcli.json found in the project directory');
 
-  const client = await OverleafClient.fromSessionCookie(session, baseUrl, cookieName || 'overleaf_session2');
+  let client;
+  if (session) {
+    try {
+      client = await OverleafClient.fromSessionCookie(session, baseUrl, cookieName || 'overleaf_session2');
+    } catch (error) {
+      if (!password) throw error;
+    }
+  }
+  if (!client) client = await OverleafClient.fromPasswordLogin(password.email, password.password, baseUrl);
   client.setGlobalTimeout(timeoutMs);
   const result = await client.compileWithOutputs(projectId, resourcePath || undefined);
 

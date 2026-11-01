@@ -3,7 +3,7 @@
   "displayName": "VS Code olcli Sync",
   "icon": "resources/icon.png",
   "description": "Automatically sync and compile Overleaf projects with olcli.",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "license": "MIT",
   "publisher": "BunnyLutts",
   "repository": {
