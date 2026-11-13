@@ -35,7 +35,7 @@ The Marketplace extension identifier is `BunnyLutts.vsolcli`. See [Building a VS
 
 ## Quick start
 
-1. Run **olcli: Login to Self-hosted Overleaf** from the Command Palette.
+1. Open **olcli** in the Activity Bar and click **Login to Overleaf** in the empty Projects view, or run **olcli: Login to Self-hosted Overleaf** from the Command Palette.
 2. Enter your instance URL and authenticate with email/password or a session cookie.
 3. Open the **olcli** view in the Activity Bar, expand your server, and select a project to pull into a local folder.
 4. Open a `.tex` file in the pulled project and save it. The extension synchronizes the project, compiles in the cloud by default, and downloads the PDF.

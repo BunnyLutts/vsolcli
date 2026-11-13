@@ -74,6 +74,10 @@ test('self-hosted login, project tree, pull and authentication failures', async 
   extension.activate({ subscriptions: [], secrets: { get: async key => stored.get(key), store: async (key, value) => stored.set(key, value) } });
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(latexSettings['latex.autoBuild.run'], 'never');
+  // An empty tree lets VS Code render the contributed welcome/login button.
+  assert.deepEqual(await provider.getChildren(), []);
+  assert.equal(calls.length, 0, 'a fresh install should not request projects before login');
+  assert.equal(typeof commands.get('olcli.login'), 'function');
   inputs = ['https://custom.example/', 'overleaf.sid=private-cookie'];
   await commands.get('olcli.login')();
   assert.equal(settings.baseUrl, 'https://custom.example');

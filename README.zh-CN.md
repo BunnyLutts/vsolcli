@@ -56,7 +56,7 @@ npm test      # 先编译，再运行测试
 
 ## 快速开始
 
-1. 运行 `olcli: Login to Self-hosted Overleaf`，输入实例地址并完成登录，详见 [Self-hosted 登录与项目面板](#self-hosted-登录与项目面板)。
+1. 打开活动栏的 `olcli`，点击空项目面板中的 **Login to Overleaf** 按钮，或在命令面板运行 `olcli: Login to Self-hosted Overleaf`，输入实例地址并完成登录，详见 [Self-hosted 登录与项目面板](#self-hosted-登录与项目面板)。
 2. 打开活动栏的 `olcli` 视图，展开服务器后点击项目即可拉取到本地；也可通过 `olcli.projectRoot` 指定项目目录（默认使用第一个工作区目录）。
 3. 打开项目中的 `.tex` 文件，保存即可自动同步并云端编译；也可使用编辑器右上角的同步并编译按钮。
 
