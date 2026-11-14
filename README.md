@@ -145,7 +145,8 @@ With a usable session, server configuration, and project metadata, the extension
 
 Remote snapshots and a conflict manifest are written under `.olcli-conflicts/<timestamp>/`.
 
-- Choose **Show Difference** in the conflict notification to compare the Overleaf snapshot on the left with your local file on the right. For multiple conflicts, select a file first.
+- Each sync that detects a conflict shows a warning. Choose **Show Difference** to compare the Overleaf snapshot on the left with your local file on the right.
+- **Show Conflict Difference** is always available in the editor title toolbar. It opens the latest unresolved conflicts detected for the current project in this VS Code session. With multiple conflicts, either comparison entry lets you select a file first.
 - Choose **Show Conflicts** to reveal the snapshot directory in VS Code's Explorer.
 - Diff editor title actions provide **Sync Project**, **Resolve Conflicts (Keep Local)**, and **Resolve Conflicts (Keep Remote)**.
 - Keep actions apply to **all conflicts in the reviewed project**, not only the displayed file. Keeping local saves unsaved project buffers first. Before keeping remote, save or revert unsaved project buffers.

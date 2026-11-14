@@ -4,6 +4,47 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { harness, waitFor, projectDir } = require('./harness.cjs');
 
+test('repeated sync conflicts warn again and the toolbar opens the latest snapshot', async () => {
+  const root = projectDir('vsolcli-repeat-conflict-');
+  const h = harness({ projectRoot: root, storedSession: { OVERLEAF_SESSION: 'test-session' } });
+  try {
+    const command = 'olcli.showConflictDifference';
+    const toolbarItem = require('../package.json').contributes.menus['editor/title'].find(item => item.command === command);
+    assert.match(toolbarItem.group, /^navigation@/);
+    assert.equal(toolbarItem.when, undefined, 'the toolbar action is available before any conflict');
+    const compare = h.commands.get(command);
+    await compare();
+    assert.equal(h.tabs.length, 0);
+
+    const conflict = { path: 'main.tex', kind: 'both-modified', remoteCopy: 'main.remote' };
+    for (const snapshot of ['first', 'latest']) {
+      const conflictsDir = `.olcli-conflicts/${snapshot}`;
+      fs.mkdirSync(path.join(root, conflictsDir), { recursive: true });
+      fs.writeFileSync(path.join(root, conflictsDir, conflict.remoteCopy), snapshot);
+      h.sidecar({
+        conflicts: [conflict],
+        conflictsDir,
+        errors: snapshot === 'latest' ? [{ path: 'other.tex', message: 'upload failed' }] : []
+      });
+      await h.commands.get('olcli.sync')();
+    }
+    assert.equal(h.warnings.length, 2);
+    assert.notEqual(h.warnings[0], h.warnings[1], 'VS Code can coalesce identical notifications');
+    assert.equal(h.tabs.length, 0, 'notifications were dismissed without opening a comparison');
+
+    await compare();
+    assert.equal(h.tabs[0].input.original.fsPath, path.join(root, '.olcli-conflicts', 'latest', conflict.remoteCopy));
+    assert.equal(h.errors.length, 1, 'the upload failure is still reported');
+
+    await h.commands.get('olcli.sync')();
+    await compare();
+    assert.equal(h.tabs.length, 0, 'a clean sync clears the toolbar comparison');
+  } finally {
+    h.dispose();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 for (const scenario of ['both-modified', 'local-unsaved', 'local-deleted-remote-modified', 'remote-deleted-local-modified', 'multiple', 'cancel', 'missing-copy', 'command-failure', 'folder']) {
   test(`conflict difference: ${scenario}`, async () => {
     const root = projectDir('vsolcli-diff-');

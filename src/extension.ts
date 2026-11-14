@@ -12,7 +12,8 @@ import { periodicDelayMs } from './autoSync';
 let timer: NodeJS.Timeout | undefined;
 let periodicTimer: NodeJS.Timeout | undefined;
 let periodicFailures = 0;
-let lastConflictSignature = '';
+let conflictNotificationCount = 0;
+const projectConflicts = new Map<string, { conflicts: SyncConflict[]; conflictsDir?: string | null }>();
 const conflictDiffs: Array<{ cwd: string; original: vscode.Uri; modified: vscode.Uri }> = [];
 const approvalSaves = new Set<string>();
 let running = false;
@@ -72,6 +73,20 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand('olcli.listProjects', () => projects.refresh()),
     vscode.commands.registerCommand('olcli.pullProject', (project?: Project) => pullProject(project, output, projects)),
     vscode.commands.registerCommand('olcli.openPdfPreview', (uri?: vscode.Uri) => openPdfPreview(uri, output)),
+    vscode.commands.registerCommand('olcli.showConflictDifference', async (uri?: vscode.Uri) => {
+      const resource = uri ?? vscode.window.activeTextEditor?.document.uri;
+      const cwd = conflictProject(resource) ?? (resource?.scheme === 'file' ? projectRootFor(resource.fsPath) : undefined) ?? root();
+      const latest = cwd ? projectConflicts.get(path.resolve(cwd)) : undefined;
+      if (!cwd || !latest) {
+        vscode.window.showInformationMessage('olcli: No unresolved sync conflicts recorded for this project in this session.');
+        return;
+      }
+      try {
+        await showConflictDifference(latest.conflicts, cwd, latest.conflictsDir);
+      } catch (error) {
+        vscode.window.showErrorMessage(`olcli: unable to show conflicts: ${message(error)}`);
+      }
+    }),
     vscode.commands.registerCommand('olcli.resolveConflictsLocal', (uri?: vscode.Uri) => resolveConflicts('local', output, conflictProject(uri))),
     vscode.commands.registerCommand('olcli.resolveConflictsRemote', (uri?: vscode.Uri) => resolveConflicts('remote', output, conflictProject(uri))),
     vscode.workspace.onDidSaveTextDocument(document => {
@@ -328,11 +343,9 @@ async function syncAndMaybeCompile(compile: boolean, output: vscode.OutputChanne
       return false;
     }
     if (outcome.conflicts.length > 0) {
-      reportConflicts(outcome.conflicts, cwd, output, outcome.conflictsDir);
       output.appendLine(`cloud compile skipped: ${outcome.conflicts.length} unresolved sync conflict(s)`);
       return false;
     }
-    lastConflictSignature = '';
     // Any successful run (save or interval) means the server is reachable
     // again, so the next background tick can go back to the base interval.
     periodicFailures = 0;
@@ -356,7 +369,7 @@ async function syncAndMaybeCompile(compile: boolean, output: vscode.OutputChanne
 }
 
 /** Result of a sync attempt: unresolved conflicts, or a skipped concurrent run. */
-interface SyncOutcome { conflicts: SyncConflict[]; skipped: boolean; conflictsDir?: string | null; }
+interface SyncOutcome { conflicts: SyncConflict[]; skipped: boolean; }
 
 /**
  * Sync one project directory and return unresolved conflicts (empty on success).
@@ -366,12 +379,14 @@ interface SyncOutcome { conflicts: SyncConflict[]; skipped: boolean; conflictsDi
  * blind-overwrite semantics.
  */
 async function syncProject(cwd: string, output: vscode.OutputChannel, server?: Server, prefer?: ConflictPreference): Promise<SyncOutcome> {
+  const projectKey = path.resolve(cwd);
   const summary = await runSafeSync(cwd, output, server, prefer);
   if (!summary) {
     if (prefer) throw new Error('resolving conflicts needs a stored olcli session; log in first, then retry');
     if (!hasProjectMetadata(cwd, false)) throw new ProjectNotConfiguredError(PROJECT_SETUP_HINT);
     output.appendLine('safe sync unavailable (no stored session or project marker); falling back to `olcli sync` without conflict detection');
     await execute('sync', cwd, output, server);
+    projectConflicts.delete(projectKey);
     return { conflicts: [], skipped: false };
   }
   if (summary.skipped) {
@@ -381,11 +396,17 @@ async function syncProject(cwd: string, output: vscode.OutputChannel, server?: S
   if (summary.conflictsDir) output.appendLine(`conflict copies: ${summary.conflictsDir}`);
   if (summary.merged) output.appendLine(`auto-merged ${summary.merged} file(s) with a three-way merge`);
   output.appendLine(`sync: pulled ${summary.pulled ?? 0}, pushed ${summary.pushed ?? 0}, deleted remote ${summary.deletedRemote ?? 0}, deleted local ${summary.deletedLocal ?? 0}, unchanged ${summary.unchanged ?? 0}`);
+  const conflicts = summary.conflicts ?? [];
+  if (conflicts.length > 0) {
+    projectConflicts.set(projectKey, { conflicts, conflictsDir: summary.conflictsDir });
+    reportConflicts(conflicts, cwd, output, summary.conflictsDir);
+  }
   if (summary.errors?.length) {
     for (const failure of summary.errors) output.appendLine(`sync error: ${failure.path}: ${failure.message}`);
     throw new Error(`${summary.errors.length} file operation(s) failed; see the olcli output`);
   }
-  return { conflicts: summary.conflicts ?? [], conflictsDir: summary.conflictsDir, skipped: false };
+  if (conflicts.length === 0) projectConflicts.delete(projectKey);
+  return { conflicts, skipped: false };
 }
 
 /**
@@ -421,14 +442,12 @@ function dirtyProjectDocuments(cwd: string): string[] {
     .map(document => path.relative(cwd, document.uri.fsPath).split(path.sep).join('/'));
 }
 
-/** Report conflicts once per distinct set, and offer the copies folder. */
 function reportConflicts(conflicts: SyncConflict[], cwd: string, output: vscode.OutputChannel, conflictsDir?: string | null): void {
   for (const conflict of conflicts) output.appendLine(`conflict: ${conflict.path} (${describeConflict(conflict.kind)})`);
-  const signature = `${cwd}|${conflicts.map(conflict => `${conflict.path}:${conflict.kind}`).sort().join('|')}`;
-  if (signature === lastConflictSignature) return;
-  lastConflictSignature = signature;
+  // VS Code can coalesce identical notifications while an earlier one is still open.
+  const notification = ++conflictNotificationCount;
   const label = conflicts.length === 1 ? conflicts[0].path : `${conflicts.length} files`;
-  void Promise.resolve(vscode.window.showWarningMessage(`olcli: ${label} changed both locally and in Overleaf, so both versions were kept. Remote copies are in .olcli-conflicts/.`, 'Show Difference', 'Show Conflicts')).then(async choice => {
+  void Promise.resolve(vscode.window.showWarningMessage(`olcli sync conflict #${notification}: ${label} changed both locally and in Overleaf, so both versions were kept. Remote copies are in .olcli-conflicts/.`, 'Show Difference', 'Show Conflicts')).then(async choice => {
     if (choice === 'Show Difference') await showConflictDifference(conflicts, cwd, conflictsDir);
     if (choice === 'Show Conflicts') await vscode.commands.executeCommand('revealInExplorer', vscode.Uri.file(path.resolve(cwd, conflictsDir ?? '.olcli-conflicts')));
   }).catch(error => vscode.window.showErrorMessage(`olcli: unable to show conflicts: ${message(error)}`));
@@ -529,10 +548,7 @@ async function resolveConflicts(prefer: ConflictPreference, output: vscode.Outpu
     const outcome = await syncProject(cwd, output, serverForProject(cwd), prefer);
     if (outcome.skipped) {
       vscode.window.showWarningMessage('olcli: another sync is already running for this project; try again when it finishes.');
-    } else if (outcome.conflicts.length > 0) {
-      reportConflicts(outcome.conflicts, cwd, output, outcome.conflictsDir);
-    } else {
-      lastConflictSignature = '';
+    } else if (outcome.conflicts.length === 0) {
       await closeConflictDiffs(cwd);
       vscode.window.showInformationMessage(`olcli: conflicts resolved, kept the ${prefer === 'local' ? 'local files' : 'Overleaf versions'}.`);
     }
